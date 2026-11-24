@@ -1,0 +1,4121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orbital Watch — 3D Orbital Collision-Avoidance Puzzle</title>
+  <meta name="description" content="Deterministic 3D orbital collision-avoidance puzzle simulation. Calculate transit deltas (t = L / v_modified), place perturbation zones on Earth's orbital grid, and clear 10 orbital periods." />
+  <meta property="og:title" content="Orbital Watch" />
+  <meta property="og:description" content="Deterministic 3D orbital collision-avoidance puzzle simulation. Place perturbation zones on Earth's grid and clear 10 orbital periods." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <style>
+    :root {
+      --bg-void: #050811;
+      --surface-panel: rgba(9, 14, 26, 0.94);
+      --surface-elevated: rgba(15, 23, 42, 0.96);
+      --surface-control: rgba(30, 41, 59, 0.8);
+      --surface-control-hover: rgba(51, 65, 85, 0.94);
+      --border-hairline: rgba(148, 163, 184, 0.22);
+      --border-strong: rgba(148, 163, 184, 0.42);
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-cyan: #38bdf8;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --accent-emerald: #34d399;
+      --accent-violet: #a855f7;
+      --accent-teal: #14b8a6;
+      --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg-void);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+    }
+
+    #viewport-root {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+    }
+
+    #viewport-root canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: none;
+    }
+
+    /* Projected 3D Labels */
+    #world-labels {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .world-label {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: rgba(6, 10, 20, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.34);
+      color: #f1f5f9;
+      pointer-events: none;
+      font-variant-numeric: tabular-nums;
+      transition: opacity 110ms ease;
+    }
+
+    .world-label.sat-label {
+      transform: translate(-50%, -155%);
+    }
+
+    .world-label.zone-label {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 1px 5px;
+      background: rgba(6, 10, 20, 0.88);
+      pointer-events: auto;
+      cursor: pointer;
+    }
+
+    .world-label.zone-label:hover,
+    .world-label.zone-label.inspected {
+      background: rgba(15, 23, 42, 0.96);
+      box-shadow: 0 0 0 1px rgba(248, 250, 252, 0.45);
+      color: #ffffff;
+    }
+
+    .world-label.collision-label {
+      background: rgba(65, 10, 24, 0.94);
+      border-color: #fb7185;
+      color: #ffe4e6;
+      font-size: 10.5px;
+      padding: 3px 8px;
+      transform: translate(-50%, -140%);
+    }
+
+    .world-label.collision-label.clear {
+      background: rgba(6, 46, 36, 0.94);
+      border-color: #34d399;
+      color: #d1fae5;
+    }
+
+    /* Floating Drag Ghost */
+    #drag-ghost {
+      position: fixed;
+      z-index: 50;
+      pointer-events: none;
+      display: none;
+      transform: translate(14px, -50%);
+      padding: 6px 10px;
+      border-radius: 5px;
+      background: rgba(9, 14, 26, 0.96);
+      border: 1px solid var(--accent-cyan);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #f8fafc;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #drag-ghost.visible {
+      display: block;
+    }
+
+    /* Title Screen Overlay */
+    #title-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 40px 56px 28px;
+      background: linear-gradient(90deg, rgba(5, 8, 17, 0.92) 0%, rgba(5, 8, 17, 0.65) 38%, rgba(5, 8, 17, 0.1) 68%, rgba(5, 8, 17, 0) 100%);
+      transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    body:not([data-state="title"]) #title-overlay {
+      opacity: 0;
+      pointer-events: none;
+      visibility: hidden;
+    }
+
+    .title-hero {
+      margin-top: auto;
+      margin-bottom: auto;
+      max-width: 450px;
+      pointer-events: auto;
+    }
+
+    .title-emblem {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .title-wordmark {
+      font-size: clamp(2.1rem, 3.6vw, 3rem);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      line-height: 1.08;
+      color: #f8fafc;
+      text-wrap: balance;
+    }
+
+    .title-desc {
+      margin-top: 12px;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #cbd5e1;
+      max-width: 42ch;
+    }
+
+    .title-specs {
+      margin-top: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .title-actions {
+      margin-top: 26px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .title-controls-hint {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: #94a3b8;
+      letter-spacing: 0.02em;
+    }
+
+    /* Buttons */
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      min-height: 40px;
+      background: var(--accent-cyan);
+      color: #04101d;
+      font-family: var(--font-sans);
+      font-size: 13.5px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease, transform 120ms ease;
+    }
+
+    .btn-primary:hover {
+      background: #7dd3fc;
+    }
+
+    .btn-primary:active {
+      transform: translateY(1px);
+    }
+
+    .btn-primary.stop-mode,
+    .btn-primary.pause-mode {
+      background: #f59e0b;
+      color: #160c02;
+    }
+
+    .btn-primary.stop-mode:hover,
+    .btn-primary.pause-mode:hover {
+      background: #fbbf24;
+    }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 14px;
+      min-height: 40px;
+      background: var(--surface-control);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 12.5px;
+      font-weight: 600;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease, border-color 140ms ease;
+    }
+
+    .btn-secondary:hover {
+      background: var(--surface-control-hover);
+      border-color: rgba(148, 163, 184, 0.58);
+    }
+
+    .btn-secondary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    button:focus-visible {
+      outline: 2px solid var(--accent-cyan);
+      outline-offset: 2px;
+    }
+
+    /* Active Gameplay HUD */
+    #hud-layer {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 200ms ease;
+    }
+
+    body:not([data-state="title"]) #hud-layer {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    /* Top Mission Strip */
+    .hud-top-bar {
+      position: fixed;
+      top: 14px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .mission-strip {
+      position: relative;
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 7px 32px 7px 13px;
+      background: var(--surface-panel);
+      border: 1px solid var(--border-hairline);
+      border-radius: 6px;
+      min-width: 0;
+    }
+
+    .mission-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #f8fafc;
+      white-space: nowrap;
+    }
+
+    .level-select {
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
+      color: #f8fafc;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      padding: 2px 6px;
+      cursor: pointer;
+    }
+
+    .level-select:hover:not(:disabled) {
+      border-color: var(--accent-cyan);
+    }
+
+    .level-select:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .mission-divider {
+      width: 1px;
+      height: 15px;
+      background: var(--border-hairline);
+      flex-shrink: 0;
+    }
+
+    .mission-metric {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .metric-kicker {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .metric-val {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .period-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .period-track {
+      width: 72px;
+      height: 5px;
+      background: rgba(148, 163, 184, 0.2);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .period-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent-cyan);
+      transition: width 80ms linear;
+    }
+
+    .status-plan { color: #38bdf8; }
+    .status-run  { color: #34d399; }
+    .status-warn { color: #f59e0b; }
+    .status-fail { color: #f43f5e; }
+    .status-ok   { color: #34d399; }
+
+    .utility-strip {
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-width: 34px;
+      height: 34px;
+      padding: 0 10px;
+      background: var(--surface-panel);
+      border: 1px solid var(--border-hairline);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease, border-color 140ms ease;
+    }
+
+    .icon-btn:hover {
+      background: var(--surface-control-hover);
+      border-color: var(--border-strong);
+    }
+
+    .icon-btn[aria-pressed="true"] {
+      background: rgba(56, 189, 248, 0.16);
+      border-color: rgba(56, 189, 248, 0.6);
+      color: #e0f2fe;
+    }
+
+    /* Small "!" Info Popover Triggers (Top-Right Corners) */
+    .info-bang-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 17px;
+      height: 17px;
+      padding: 0;
+      border-radius: 4px;
+      background: rgba(30, 41, 59, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.34);
+      color: #94a3b8;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+    }
+
+    .info-bang-btn:hover,
+    .info-bang-btn[aria-expanded="true"] {
+      border-color: var(--accent-cyan);
+      background: rgba(56, 189, 248, 0.22);
+      color: #f0f9ff;
+    }
+
+    .info-bang-corner {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+    }
+
+    .mission-strip .info-bang-corner {
+      top: 50%;
+      right: 8px;
+      transform: translateY(-50%);
+    }
+
+    /* Shared Floating "!" Detail Popover */
+    #info-popover {
+      position: fixed;
+      z-index: 70;
+      width: min(300px, calc(100vw - 24px));
+      padding: 10px 12px;
+      background: rgba(7, 11, 22, 0.98);
+      border: 1px solid rgba(56, 189, 248, 0.48);
+      border-radius: 6px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.62);
+      color: var(--text-primary);
+      pointer-events: auto;
+      display: none;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    #info-popover.open {
+      display: flex;
+    }
+
+    .popover-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .popover-title {
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+
+    .popover-badge {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: #94a3b8;
+    }
+
+    .popover-body {
+      font-family: var(--font-sans);
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: #cbd5e1;
+    }
+
+    .popover-formula {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      line-height: 1.4;
+      color: #e2e8f0;
+      padding: 5px 7px;
+      border-radius: 4px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Compact Minimal Planning Dock (Bottom-Left) */
+    .dock-shell {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      width: min(760px, calc(100vw - 322px));
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .dock-shell.collapsed {
+      transform: translateY(calc(100% - 22px));
+    }
+
+    .dock-collapse-tab {
+      pointer-events: auto;
+      margin-left: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 12px;
+      height: 24px;
+      background: var(--surface-panel);
+      border: 1px solid var(--border-hairline);
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .dock-collapse-tab:hover {
+      color: var(--text-primary);
+      background: var(--surface-elevated);
+    }
+
+    .dock-panel {
+      pointer-events: auto;
+      width: 100%;
+      background: var(--surface-panel);
+      border: 1px solid var(--border-hairline);
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: grid;
+      grid-template-columns: 1.08fr 1fr;
+      gap: 14px;
+    }
+
+    .dock-col {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .dock-col + .dock-col {
+      border-left: 1px solid var(--border-hairline);
+      padding-left: 14px;
+    }
+
+    .col-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .col-header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .col-title {
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+
+    .col-meta {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* Minimal Perturbation Zone Cards */
+    .palette-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .zone-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 7px 26px 7px 9px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid var(--border-hairline);
+      border-radius: 5px;
+      text-align: left;
+      color: var(--text-primary);
+      cursor: grab;
+      touch-action: none;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .zone-card:hover:not([data-used="true"]) {
+      background: rgba(30, 41, 59, 0.94);
+      border-color: var(--border-strong);
+    }
+
+    .zone-card:active:not([data-used="true"]) {
+      cursor: grabbing;
+    }
+
+    .zone-card.armed {
+      background: rgba(56, 189, 248, 0.14);
+      border-color: var(--accent-cyan);
+    }
+
+    .zone-card[data-used="true"] {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    .zone-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .zone-card-name {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .zone-swatch {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .zone-card-sub {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .zone-card-effect {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .btn-flip-sign {
+      padding: 0 5px;
+      height: 17px;
+      background: rgba(30, 41, 59, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.42);
+      border-radius: 3px;
+      color: #e2e8f0;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn-flip-sign:hover {
+      border-color: var(--accent-cyan);
+      color: #ffffff;
+    }
+
+    .zone-abbr {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    /* Compact Satellite Parameter Table & Placed Zone Chips */
+    .sat-table {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      max-height: 158px;
+      overflow-y: auto;
+    }
+
+    .sat-row {
+      display: grid;
+      grid-template-columns: 1fr 0.85fr 0.72fr 1.25fr;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: rgba(15, 23, 42, 0.54);
+    }
+
+    .sat-row.head {
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding-bottom: 1px;
+    }
+
+    .sat-row.risk-pair {
+      background: rgba(244, 63, 94, 0.09);
+      border: 1px solid rgba(244, 63, 94, 0.28);
+    }
+
+    .sat-id-cell {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 700;
+      color: #f8fafc;
+      white-space: nowrap;
+    }
+
+    .placed-list {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 5px;
+      min-height: 26px;
+      max-height: 54px;
+      overflow-y: auto;
+    }
+
+    .placed-empty {
+      width: 100%;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      padding: 4px 8px;
+      border: 1px dashed rgba(148, 163, 184, 0.2);
+      border-radius: 4px;
+      text-align: center;
+    }
+
+    .placed-row {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 6px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      cursor: grab;
+      white-space: nowrap;
+    }
+
+    .placed-row:hover,
+    .placed-row.inspected {
+      border-color: rgba(56, 189, 248, 0.65);
+      background: rgba(30, 41, 59, 0.94);
+    }
+
+    .btn-remove-zone {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 17px;
+      height: 17px;
+      padding: 0;
+      background: rgba(244, 63, 94, 0.14);
+      border: 1px solid rgba(244, 63, 94, 0.42);
+      border-radius: 3px;
+      color: #fda4af;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .btn-remove-zone:hover:not(:disabled) {
+      background: rgba(244, 63, 94, 0.3);
+      color: #ffffff;
+    }
+
+    .btn-remove-zone:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    /* Prominent Fixed Bottom-Right Execution & RUN Control */
+    .launch-pad {
+      position: fixed;
+      right: 18px;
+      bottom: 16px;
+      z-index: 25;
+      pointer-events: auto;
+      width: 274px;
+      padding: 10px 12px 11px;
+      background: var(--surface-panel);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .launch-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding-right: 22px;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .launch-controls-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .speed-pills {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+    }
+
+    .speed-btn {
+      height: 28px;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .speed-btn:hover {
+      background: var(--surface-control);
+      color: var(--text-primary);
+    }
+
+    .speed-btn[aria-pressed="true"] {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: var(--accent-cyan);
+      color: #ffffff;
+    }
+
+    .btn-clear-compact {
+      height: 28px;
+      padding: 0 10px;
+      background: var(--surface-control);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn-clear-compact:hover:not(:disabled) {
+      background: var(--surface-control-hover);
+    }
+
+    .btn-clear-compact:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .launch-run-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      align-items: stretch;
+    }
+
+    .btn-run-hero {
+      width: 100%;
+      min-height: 46px;
+      font-size: 14.5px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      box-shadow: 0 0 22px rgba(56, 189, 248, 0.28);
+    }
+
+    .btn-reset-sim {
+      min-height: 46px;
+      padding: 0 11px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .metric-val.status-pause {
+      color: #fbbf24;
+    }
+
+    /* Status Modals (Victory / Failure) */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background: rgba(4, 7, 15, 0.78);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal-card {
+      width: min(470px, 100%);
+      background: #0b1120;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .modal-kicker {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent-emerald);
+    }
+
+    .modal-kicker.danger {
+      color: var(--accent-rose);
+    }
+
+    .modal-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-top: 4px;
+    }
+
+    .modal-body {
+      font-size: 14px;
+      line-height: 1.55;
+      color: #cbd5e1;
+    }
+
+    .modal-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding: 12px 0;
+      border-top: 1px solid var(--border-hairline);
+      border-bottom: 1px solid var(--border-hairline);
+    }
+
+    .stat-box {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .stat-box-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .stat-box-val {
+      font-family: var(--font-mono);
+      font-size: 14.5px;
+      font-weight: 700;
+      color: #f8fafc;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .modal-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 1020px) {
+      #title-overlay {
+        padding: 24px 20px 18px;
+      }
+
+      .hud-top-bar {
+        flex-wrap: wrap;
+      }
+
+      .mission-strip {
+        gap: 10px;
+        padding: 6px 32px 6px 10px;
+        flex: 1 1 auto;
+      }
+
+      .hide-sm {
+        display: none;
+      }
+
+      .dock-shell {
+        width: calc(100vw - 32px);
+        left: 16px;
+        bottom: 148px;
+      }
+
+      .dock-panel {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        max-height: 30vh;
+        overflow-y: auto;
+      }
+
+      .dock-col + .dock-col {
+        border-left: none;
+        border-top: 1px solid var(--border-hairline);
+        padding-left: 0;
+        padding-top: 10px;
+      }
+
+      .launch-pad {
+        width: calc(100vw - 32px);
+        right: 16px;
+        bottom: 12px;
+      }
+    }
+  </style>
+</head>
+<body data-state="title" data-level="1">
+  <!-- Isolated 3D WebGL Viewport -->
+  <div id="viewport-root" data-testid="orbital-viewport"></div>
+
+  <!-- Projected 3D Labels -->
+  <div id="world-labels" aria-hidden="true"></div>
+
+  <!-- Floating Drag Ghost -->
+  <div id="drag-ghost" aria-hidden="true"></div>
+
+  <!-- Title Screen -->
+  <section id="title-overlay" aria-label="Orbital Watch Title Screen">
+    <div></div>
+    <div class="title-hero">
+      <div class="title-emblem">
+        <svg width="44" height="44" viewBox="0 0 44 44" fill="none" aria-hidden="true">
+          <circle cx="22" cy="22" r="10" stroke="#38bdf8" stroke-width="1.6" />
+          <ellipse cx="22" cy="22" rx="19" ry="7.5" transform="rotate(-28 22 22)" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="3 2.5" />
+          <ellipse cx="22" cy="22" rx="19" ry="7.5" transform="rotate(34 22 22)" stroke="#f59e0b" stroke-width="1.35" />
+          <circle cx="37" cy="14" r="2.8" fill="#38bdf8" />
+          <circle cx="9" cy="13" r="2.4" fill="#f59e0b" />
+        </svg>
+        <h1 class="title-wordmark">Orbital Watch</h1>
+      </div>
+      <p class="title-desc">
+        Solve orbital conjunctions through exact arithmetic. Calculate transit delays (t = L / v<sub>mod</sub>), drag perturbation zones onto Earth&rsquo;s 20&deg; grid, and guide all five satellites through 10 collision-free periods.
+      </p>
+      <div class="title-specs">
+        <span>5 Satellites</span>
+        <span aria-hidden="true">&middot;</span>
+        <span>v = 10.0 u/s (T = 36.0s)</span>
+        <span aria-hidden="true">&middot;</span>
+        <span>10-Period Goal</span>
+      </div>
+      <div class="title-actions">
+        <button id="btn-launch" class="btn-primary" type="button" data-start="true">
+          Start Level 1
+        </button>
+      </div>
+    </div>
+    <div class="title-controls-hint">
+      Drag Zones to Grid &middot; Orbit Drag Globe &middot; Space Run / Stop &middot; H Hide HUD
+    </div>
+  </section>
+
+  <!-- Active Puzzle HUD -->
+  <div id="hud-layer" aria-label="Orbital Puzzle HUD">
+    <div class="hud-top-bar">
+      <div class="mission-strip" role="status" aria-live="off">
+        <div class="mission-brand">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="5" stroke="#38bdf8" stroke-width="1.8" />
+            <ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(-25 12 12)" stroke="#94a3b8" stroke-width="1.3" />
+          </svg>
+          <select id="level-select" class="level-select" aria-label="Select puzzle level">
+            <option value="1">Level 1</option>
+            <option value="2">Level 2</option>
+            <option value="3">Level 3</option>
+          </select>
+          <span id="hud-level-title" style="display:none">Level 1</span>
+        </div>
+        <div class="mission-divider" aria-hidden="true"></div>
+        <div class="mission-metric">
+          <span class="metric-kicker">Period</span>
+          <div class="period-bar-wrap">
+            <span id="hud-period" class="metric-val">0.00 / 10</span>
+            <div class="period-track hide-sm" aria-hidden="true">
+              <div id="hud-period-fill" class="period-fill"></div>
+            </div>
+          </div>
+        </div>
+        <div class="mission-divider hide-sm" aria-hidden="true"></div>
+        <div class="mission-metric hide-sm">
+          <span class="metric-kicker">Forecast</span>
+          <span id="hud-forecast" class="metric-val status-fail">&Delta;t 0.00s &middot; Collision</span>
+        </div>
+        <span id="hud-phase-status" style="display:none">Planning</span>
+        <button class="info-bang-btn info-bang-corner" type="button" data-info-key="mission" aria-label="Mission rules info" aria-expanded="false">!</button>
+      </div>
+
+      <div class="utility-strip">
+        <button id="btn-toggle-grid" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle orbital grid lines" tabindex="-1">
+          Grid: ON
+        </button>
+        <button id="btn-mute" class="icon-btn" type="button" aria-pressed="true" aria-label="Toggle sound effects" tabindex="-1">
+          Audio: ON
+        </button>
+        <button id="btn-reset-cam" class="icon-btn" type="button" aria-label="Reset camera view" tabindex="-1">
+          View [V]
+        </button>
+      </div>
+    </div>
+
+    <!-- Collapsible Minimal Planning Dock (Bottom-Left) -->
+    <div id="dock-shell" class="dock-shell">
+      <button id="btn-collapse-hud" class="dock-collapse-tab" type="button" aria-expanded="true" aria-controls="dock-panel">
+        Hide HUD [H]
+      </button>
+
+      <div id="dock-panel" class="dock-panel">
+        <!-- Column 1: Minimal Perturbation Zone Cards -->
+        <section class="dock-col" aria-label="Perturbation Zone Inventory">
+          <div class="col-header">
+            <span class="col-title">Zones</span>
+            <div class="col-header-right">
+              <span class="col-meta">Drag to grid</span>
+              <button class="info-bang-btn" type="button" data-info-key="zones-help" aria-label="Zone placement rules" aria-expanded="false">!</button>
+            </div>
+          </div>
+          <div id="zone-palette" class="palette-grid" data-testid="zone-palette"></div>
+        </section>
+
+        <!-- Column 2: Minimal Satellites & Placed Zone Chips -->
+        <section class="dock-col" aria-label="Satellites and Placed Zones">
+          <div class="col-header">
+            <span class="col-title">Satellites</span>
+            <div class="col-header-right">
+              <span id="collision-course-meta" class="col-meta">Node X @ 12.0s</span>
+              <button class="info-bang-btn" type="button" data-info-key="sats-help" aria-label="Conjunction details" aria-expanded="false">!</button>
+            </div>
+          </div>
+          <div id="sat-table" class="sat-table" data-testid="satellite-table"></div>
+          <div id="placed-list" class="placed-list" data-testid="placed-zones-list"></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Prominent Fixed Bottom-Right Execution & RUN Control -->
+    <aside class="launch-pad" aria-label="Simulation Launch Controls">
+      <div class="launch-meta-row">
+        <span id="sim-time-meta">t = 0.0 / 360s</span>
+        <span id="pred-delta-readout" class="status-fail">&Delta;t 0.00 / 0.27s</span>
+      </div>
+      <button class="info-bang-btn info-bang-corner" type="button" data-info-key="exec-help" aria-label="Simulation controls info" aria-expanded="false">!</button>
+
+      <div class="launch-controls-row">
+        <div id="speed-pills" class="speed-pills" role="group" aria-label="Simulation speed">
+          <button class="speed-btn" type="button" data-speed="1" aria-pressed="true">1x</button>
+          <button class="speed-btn" type="button" data-speed="5" aria-pressed="false">5x</button>
+          <button class="speed-btn" type="button" data-speed="15" aria-pressed="false">15x</button>
+        </div>
+        <button id="btn-clear-zones" class="btn-clear-compact" type="button">Clear</button>
+      </div>
+
+      <div class="launch-run-row">
+        <button id="btn-run" class="btn-primary btn-run-hero" type="button" data-testid="btn-run" aria-label="Run simulation">
+          &#9654; RUN
+        </button>
+        <button id="btn-reset-sim" class="btn-secondary btn-reset-sim" type="button" data-testid="btn-reset-sim" aria-label="Reset simulation" disabled>
+          &#8634; Reset
+        </button>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Shared Floating "!" Detail Popover -->
+  <div id="info-popover" role="tooltip" aria-hidden="true">
+    <div class="popover-head">
+      <span id="popover-title" class="popover-title"></span>
+      <span id="popover-badge" class="popover-badge"></span>
+    </div>
+    <div id="popover-body" class="popover-body"></div>
+    <div id="popover-formula" class="popover-formula"></div>
+  </div>
+
+  <!-- Failure Modal (Paused at Exact Impact with Math Breakdown) -->
+  <div id="fail-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="fail-title">
+    <div class="modal-card">
+      <div>
+        <div class="modal-kicker danger">Orbital Collision</div>
+        <h2 id="fail-title" class="modal-title">Conjunction Threshold Breached</h2>
+      </div>
+      <p id="fail-desc" class="modal-body">
+        SAT-1 and SAT-2 arrived at Node X within 0.00s — adjust net arrival delay by at least 0.28s.
+      </p>
+      <div class="modal-stats">
+        <div class="stat-box">
+          <span class="stat-box-label">Pair</span>
+          <span id="fail-stat-pair" class="stat-box-val">SAT-1 / SAT-2</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-box-label">Arrival &Delta;t</span>
+          <span id="fail-stat-delta" class="stat-box-val">0.00s / 0.28s</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-box-label">Impact Time</span>
+          <span id="fail-stat-t" class="stat-box-val">12.0s (0.33T)</span>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-fail-retry" class="btn-primary" type="button">Adjust Zones &amp; Retry</button>
+        <button id="btn-fail-clear" class="btn-secondary" type="button">Clear &amp; Retry</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Victory Modal (10 Periods Cleared -> Unlock Level 2) -->
+  <div id="victory-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="victory-title">
+    <div class="modal-card">
+      <div>
+        <div class="modal-kicker">10 Orbital Periods Cleared</div>
+        <h2 id="victory-title" class="modal-title">Level 1 Complete</h2>
+      </div>
+      <p id="victory-desc" class="modal-body">
+        All five satellites completed 10 full orbital periods with safe physical separation. Your perturbation calculation resolved the conjunction.
+      </p>
+      <div class="modal-stats">
+        <div class="stat-box">
+          <span class="stat-box-label">Periods Safe</span>
+          <span class="stat-box-val">10.0 / 10</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-box-label">Zones Used</span>
+          <span id="win-stat-zones" class="stat-box-val">2</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-box-label">Min Separation</span>
+          <span id="win-stat-sep" class="stat-box-val">256 km</span>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-next-level" class="btn-primary" type="button" data-start="true">Continue to Level 2</button>
+        <button id="btn-replay-level" class="btn-secondary" type="button">Replay Level</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js';
+    import { RoomEnvironment } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/environments/RoomEnvironment.js';
+
+    /* =========================================================================
+     * MODULE 1: DETERMINISTIC ARITHMETIC ENGINE (MATCHES src/sim/puzzleEngine.ts)
+     * ========================================================================= */
+    const DEG2RAD = Math.PI / 180;
+    const RAD2DEG = 180 / Math.PI;
+    const EARTH_RADIUS_KM = 6371;
+    const EARTH_VISUAL_RADIUS = 5.0;
+    const KM_PER_UNIT = EARTH_RADIUS_KM / EARTH_VISUAL_RADIUS;
+
+    const ORBIT_ARC_UNITS = 360.0;
+    const TARGET_PERIODS = 10.0;
+    const COLLISION_RADIUS_KM = 230;
+
+    const GRID_COLS = 18; // 20° per column (-180..+180)
+    const GRID_ROWS = 8;  // 20° per row (-80..+80)
+    const CELL_DEG = 20;
+    const GRID_LAT_MIN = -80;
+    const GRID_LAT_MAX = 80;
+
+    const ZONE_TEMPLATES = [
+      {
+        typeId: 'atmo-drag',
+        name: 'Atmospheric Drag',
+        shortName: 'Atmo Drag',
+        mapCode: 'A.D',
+        color: '#f43f5e',
+        colorHex: 0xf43f5e,
+        lengthUnits: 60,
+        defaultEffectPct: -0.03,
+        allowSignFlip: false,
+        maxCount: 1,
+      },
+      {
+        typeId: 'mass-belt',
+        name: 'Mass Belt',
+        shortName: 'Mass Belt',
+        mapCode: 'M.B',
+        color: '#f59e0b',
+        colorHex: 0xf59e0b,
+        lengthUnits: 60,
+        defaultEffectPct: 0.02,
+        allowSignFlip: false,
+        maxCount: 1,
+      },
+      {
+        typeId: 'gravity-tide',
+        name: 'Gravity Tide',
+        shortName: 'Gravity Tide',
+        mapCode: 'G.T',
+        color: '#14b8a6',
+        colorHex: 0x14b8a6,
+        lengthUnits: 60,
+        defaultEffectPct: -0.015,
+        allowSignFlip: true,
+        maxCount: 1,
+      },
+      {
+        typeId: 'rad-belt',
+        name: 'Radiation Belt',
+        shortName: 'Rad Belt',
+        mapCode: 'R.B',
+        color: '#a855f7',
+        colorHex: 0xa855f7,
+        lengthUnits: 40,
+        defaultEffectPct: 0.01,
+        allowSignFlip: true,
+        maxCount: 1,
+      },
+    ];
+
+    const LEVEL_CONFIGS = {
+      1: {
+        level: 1,
+        title: 'Level 1',
+        subtitle: 'Direct Conjunction',
+        collisionPairIds: ['sat-1', 'sat-2'],
+        collisionNodeLabel: 'Node X (0°N, 30°W)',
+        collisionNodeLatLon: { lat: 0, lon: -30 },
+        predictedCollisionSec: 12.0,
+        satellites: [
+          { id: 'sat-1', code: 'SAT-1', name: 'Aegis',    color: '#38bdf8', colorHex: 0x38bdf8, altitudeKm: 540,  inclinationDeg: 46, raanDeg: -30, initialPhaseDeg: 240, baseSpeed: 10.0 },
+          { id: 'sat-2', code: 'SAT-2', name: 'Helios',   color: '#f59e0b', colorHex: 0xf59e0b, altitudeKm: 540,  inclinationDeg: 46, raanDeg: 150, initialPhaseDeg: 60,  baseSpeed: 10.0 },
+          { id: 'sat-3', code: 'SAT-3', name: 'Polaris',  color: '#a78bfa', colorHex: 0xa78bfa, altitudeKm: 820,  inclinationDeg: 18, raanDeg: 20,  initialPhaseDeg: 140, baseSpeed: 10.0 },
+          { id: 'sat-4', code: 'SAT-4', name: 'Vanguard', color: '#34d399', colorHex: 0x34d399, altitudeKm: 1100, inclinationDeg: 74, raanDeg: 85,  initialPhaseDeg: 25,  baseSpeed: 10.0 },
+          { id: 'sat-5', code: 'SAT-5', name: 'Meridian', color: '#fb7185', colorHex: 0xfb7185, altitudeKm: 1380, inclinationDeg: 62, raanDeg: -55, initialPhaseDeg: 215, baseSpeed: 10.0 },
+        ],
+      },
+      2: {
+        level: 2,
+        title: 'Level 2',
+        subtitle: 'Pendulum LCM Convergence',
+        collisionPairIds: ['sat-1', 'sat-2'],
+        collisionNodeLabel: 'Node Y (0°N, 20°W)',
+        collisionNodeLatLon: { lat: 0, lon: -20 },
+        predictedCollisionSec: 84.0,
+        satellites: [
+          { id: 'sat-1', code: 'SAT-1', name: 'Aegis',    color: '#38bdf8', colorHex: 0x38bdf8, altitudeKm: 540,  inclinationDeg: 46, raanDeg: -20,  initialPhaseDeg: 240, baseSpeed: 10.0 },
+          { id: 'sat-2', code: 'SAT-2', name: 'Helios',   color: '#f59e0b', colorHex: 0xf59e0b, altitudeKm: 540,  inclinationDeg: 46, raanDeg: 160,  initialPhaseDeg: 252, baseSpeed: 12.0 },
+          { id: 'sat-3', code: 'SAT-3', name: 'Polaris',  color: '#a78bfa', colorHex: 0xa78bfa, altitudeKm: 900,  inclinationDeg: 24, raanDeg: 55,   initialPhaseDeg: 40,  baseSpeed: 10.0 },
+          { id: 'sat-4', code: 'SAT-4', name: 'Vanguard', color: '#34d399', colorHex: 0x34d399, altitudeKm: 1180, inclinationDeg: 74, raanDeg: -95,  initialPhaseDeg: 185, baseSpeed: 10.0 },
+          { id: 'sat-5', code: 'SAT-5', name: 'Meridian', color: '#fb7185', colorHex: 0xfb7185, altitudeKm: 1460, inclinationDeg: 32, raanDeg: 120,  initialPhaseDeg: 300, baseSpeed: 10.0 },
+        ],
+      },
+      3: {
+        level: 3,
+        title: 'Level 3',
+        subtitle: 'Zeno Pursuit & Cross-Traffic',
+        collisionPairIds: ['sat-1', 'sat-7'],
+        pursuitPairIds: ['sat-1', 'sat-2'],
+        collisionNodeLabel: 'Node Z (0°N, 0°)',
+        collisionNodeLatLon: { lat: 0, lon: 0 },
+        predictedCollisionSec: 15.85,
+        satellites: [
+          { id: 'sat-1', code: 'SAT-1', name: 'Tortoise', color: '#38bdf8', colorHex: 0x38bdf8, altitudeKm: 540, inclinationDeg: 1.5, raanDeg: 0,    initialPhaseDeg: 200, baseSpeed: 10.0 },
+          { id: 'sat-2', code: 'SAT-2', name: 'Achilles', color: '#f59e0b', colorHex: 0xf59e0b, altitudeKm: 540, inclinationDeg: 6.5, raanDeg: 0,    initialPhaseDeg: 140, baseSpeed: 12.5 },
+          { id: 'sat-3', code: 'SAT-3', name: 'Cross-1',  color: '#a78bfa', colorHex: 0xa78bfa, altitudeKm: 540, inclinationDeg: 90,  raanDeg: -144, initialPhaseDeg: 57,  baseSpeed: 10.0 },
+          { id: 'sat-4', code: 'SAT-4', name: 'Cross-2',  color: '#34d399', colorHex: 0x34d399, altitudeKm: 540, inclinationDeg: 90,  raanDeg: -108, initialPhaseDeg: 93,  baseSpeed: 10.0 },
+          { id: 'sat-5', code: 'SAT-5', name: 'Cross-3',  color: '#fb7185', colorHex: 0xfb7185, altitudeKm: 540, inclinationDeg: 90,  raanDeg: -72,  initialPhaseDeg: 129, baseSpeed: 10.0 },
+          { id: 'sat-6', code: 'SAT-6', name: 'Cross-4',  color: '#22d3ee', colorHex: 0x22d3ee, altitudeKm: 540, inclinationDeg: 90,  raanDeg: -36,  initialPhaseDeg: 165, baseSpeed: 10.0 },
+          { id: 'sat-7', code: 'SAT-7', name: 'Cross-5',  color: '#e879f9', colorHex: 0xe879f9, altitudeKm: 540, inclinationDeg: 90,  raanDeg: 0,    initialPhaseDeg: 201, baseSpeed: 10.0 },
+        ],
+      },
+    };
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function normalizeLonDeg(lon) {
+      let a = ((lon + 180) % 360 + 360) % 360 - 180;
+      if (a === -180) a = 180;
+      return a;
+    }
+
+    function angularDistanceLonDeg(lonStart, lonTest) {
+      return ((lonTest - lonStart) % 360 + 360) % 360;
+    }
+
+    function latLonToEcef(latDeg, lonDeg, radius, out = { x: 0, y: 0, z: 0 }) {
+      const lat = latDeg * DEG2RAD;
+      const lon = lonDeg * DEG2RAD;
+      const cosLat = Math.cos(lat);
+      out.x = radius * cosLat * Math.cos(lon);
+      out.y = radius * Math.sin(lat);
+      out.z = -radius * cosLat * Math.sin(lon);
+      return out;
+    }
+
+    function vec3ToLatLonDeg(v) {
+      const r = Math.hypot(v.x, v.y, v.z) || 1;
+      const latDeg = Math.asin(clamp(v.y / r, -1, 1)) * RAD2DEG;
+      const lonDeg = normalizeLonDeg(Math.atan2(-v.z, v.x) * RAD2DEG);
+      return { latDeg, lonDeg };
+    }
+
+    function latLonToGridCell(latDeg, lonDeg) {
+      const clampedLat = clamp(latDeg, GRID_LAT_MIN, GRID_LAT_MAX - 0.0001);
+      const row = clamp(Math.floor((clampedLat - GRID_LAT_MIN) / CELL_DEG), 0, GRID_ROWS - 1);
+      const normLon = normalizeLonDeg(lonDeg);
+      const col = clamp(Math.floor((normLon + 180) / CELL_DEG), 0, GRID_COLS - 1);
+      return { row, col };
+    }
+
+    function formatPct(effectPct) {
+      const pct = effectPct * 100;
+      const sign = pct > 0 ? '+' : '';
+      return Math.abs(pct) % 1 === 0 ? `${sign}${Math.round(pct)}%` : `${sign}${pct.toFixed(1)}%`;
+    }
+
+    function computeZoneTransitDelta(lengthUnits, baseSpeed, effectPct) {
+      const modifiedSpeed = baseSpeed * (1 + effectPct);
+      const baseTimeSec = lengthUnits / baseSpeed;
+      const modifiedTimeSec = lengthUnits / modifiedSpeed;
+      const deltaSec = modifiedTimeSec - baseTimeSec;
+      return { modifiedSpeed, baseTimeSec, modifiedTimeSec, deltaSec };
+    }
+
+    function createPlacedZone(template, row, col, id, effectPct = template.defaultEffectPct) {
+      const safeRow = clamp(Math.floor(row), 0, GRID_ROWS - 1);
+      const safeCol = ((Math.floor(col) % GRID_COLS) + GRID_COLS) % GRID_COLS;
+      const latMin = GRID_LAT_MIN + safeRow * CELL_DEG;
+      const latMax = latMin + CELL_DEG;
+      const lonStart = -180 + safeCol * CELL_DEG;
+      return {
+        id,
+        typeId: template.typeId,
+        name: template.name,
+        shortName: template.shortName,
+        mapCode: template.mapCode,
+        color: template.color,
+        colorHex: template.colorHex,
+        row: safeRow,
+        col: safeCol,
+        lengthUnits: template.lengthUnits,
+        effectPct,
+        latMin,
+        latMax,
+        lonStart,
+        lonEnd: lonStart + CELL_DEG,
+      };
+    }
+
+    function isLatLonInGridCell(latDeg, lonDeg, zone) {
+      if (latDeg < zone.latMin || latDeg > zone.latMax) return false;
+      const offset = angularDistanceLonDeg(zone.lonStart, lonDeg);
+      return offset >= 0 && offset <= CELL_DEG;
+    }
+
+    function computeSatKinematics(altitudeKm, inclinationDeg, raanDeg, phaseDeg, speedUnitsPerSec) {
+      const r = EARTH_RADIUS_KM + altitudeKm;
+      const u = phaseDeg * DEG2RAD;
+      const inc = inclinationDeg * DEG2RAD;
+      const raan = raanDeg * DEG2RAD;
+      const cosU = Math.cos(u), sinU = Math.sin(u);
+      const cosO = Math.cos(raan), sinO = Math.sin(raan);
+      const cosI = Math.cos(inc), sinI = Math.sin(inc);
+
+      const px = cosO, py = 0, pz = -sinO;
+      const qx = -sinO * cosI, qy = sinI, qz = -cosO * cosI;
+
+      const positionKm = {
+        x: r * (cosU * px + sinU * qx),
+        y: r * (cosU * py + sinU * qy),
+        z: r * (cosU * pz + sinU * qz),
+      };
+      const vMag = r * speedUnitsPerSec * DEG2RAD;
+      const velocityKmPerSec = {
+        x: vMag * (-sinU * px + cosU * qx),
+        y: vMag * (-sinU * py + cosU * qy),
+        z: vMag * (-sinU * pz + cosU * qz),
+      };
+      const latDeg = Math.asin(clamp(positionKm.y / r, -1, 1)) * RAD2DEG;
+      const lonDeg = normalizeLonDeg(Math.atan2(-positionKm.z, positionKm.x) * RAD2DEG);
+      return { positionKm, velocityKmPerSec, latDeg, lonDeg };
+    }
+
+    function createSatStateFromCfg(cfg) {
+      const kin = computeSatKinematics(cfg.altitudeKm, cfg.inclinationDeg, cfg.raanDeg, cfg.initialPhaseDeg, cfg.baseSpeed);
+      return {
+        ...cfg,
+        periodSec: ORBIT_ARC_UNITS / cfg.baseSpeed,
+        phaseDeg: cfg.initialPhaseDeg,
+        speed: cfg.baseSpeed,
+        latDeg: kin.latDeg,
+        lonDeg: kin.lonDeg,
+        positionKm: kin.positionKm,
+        velocityKmPerSec: kin.velocityKmPerSec,
+        activeZoneLabel: 'Nominal',
+        activeZoneColor: null,
+        transits: {},
+      };
+    }
+
+    function estimateRequiredDeltaSec(satA, satB) {
+      const vx = satB.velocityKmPerSec.x - satA.velocityKmPerSec.x;
+      const vy = satB.velocityKmPerSec.y - satA.velocityKmPerSec.y;
+      const vz = satB.velocityKmPerSec.z - satA.velocityKmPerSec.z;
+      const crossX = satA.velocityKmPerSec.y * satB.velocityKmPerSec.z - satA.velocityKmPerSec.z * satB.velocityKmPerSec.y;
+      const crossY = satA.velocityKmPerSec.z * satB.velocityKmPerSec.x - satA.velocityKmPerSec.x * satB.velocityKmPerSec.z;
+      const crossZ = satA.velocityKmPerSec.x * satB.velocityKmPerSec.y - satA.velocityKmPerSec.y * satB.velocityKmPerSec.x;
+      const crossMag = Math.hypot(crossX, crossY, crossZ);
+      const relSpeed = Math.hypot(vx, vy, vz);
+      const missRate = relSpeed > 1e-3 ? crossMag / relSpeed : 600;
+      if (missRate < 50) return 0.5;
+      return COLLISION_RADIUS_KM / missRate;
+    }
+
+    function stepPuzzleSimulation(satellites, placedZones, dt) {
+      for (const sat of satellites) {
+        let modifierProduct = 1.0;
+        for (const zone of placedZones) {
+          const tr = sat.transits[zone.id];
+          if (tr && tr.active) {
+            modifierProduct *= 1 + zone.effectPct;
+          }
+        }
+
+        sat.speed = sat.baseSpeed * modifierProduct;
+        const dArcUnits = sat.speed * dt;
+        sat.phaseDeg = (sat.phaseDeg + dArcUnits) % 360;
+
+        const kin = computeSatKinematics(sat.altitudeKm, sat.inclinationDeg, sat.raanDeg, sat.phaseDeg, sat.speed);
+        sat.latDeg = kin.latDeg;
+        sat.lonDeg = kin.lonDeg;
+        sat.positionKm = kin.positionKm;
+        sat.velocityKmPerSec = kin.velocityKmPerSec;
+
+        for (const zone of placedZones) {
+          let tr = sat.transits[zone.id];
+          if (!tr) {
+            tr = { active: false, wasInsideCell: false, arcRemainingUnits: 0, passesCompleted: 0 };
+            sat.transits[zone.id] = tr;
+          }
+          if (tr.active) {
+            tr.arcRemainingUnits -= dArcUnits;
+            if (tr.arcRemainingUnits <= 1e-6) {
+              tr.active = false;
+              tr.arcRemainingUnits = 0;
+              tr.passesCompleted += 1;
+            }
+          }
+          const insideCell = isLatLonInGridCell(sat.latDeg, sat.lonDeg, zone);
+          if (insideCell && !tr.wasInsideCell && !tr.active) {
+            tr.active = true;
+            tr.arcRemainingUnits = zone.lengthUnits;
+          }
+          tr.wasInsideCell = insideCell;
+        }
+
+        let nextMod = 1.0;
+        let activeLabel = 'Nominal';
+        let activeColor = null;
+        for (const zone of placedZones) {
+          const tr = sat.transits[zone.id];
+          if (tr && tr.active) {
+            nextMod *= 1 + zone.effectPct;
+            activeLabel = `${zone.shortName} ${formatPct(zone.effectPct)}`;
+            activeColor = zone.color;
+          }
+        }
+        sat.speed = sat.baseSpeed * nextMod;
+        sat.activeZoneLabel = activeLabel;
+        sat.activeZoneColor = activeColor;
+      }
+
+      let minSeparationKm = Infinity;
+      let collidedPair = null;
+      const riskPairs = [];
+
+      for (let i = 0; i < satellites.length; i++) {
+        for (let j = i + 1; j < satellites.length; j++) {
+          const a = satellites[i];
+          const b = satellites[j];
+          const rx = b.positionKm.x - a.positionKm.x;
+          const ry = b.positionKm.y - a.positionKm.y;
+          const rz = b.positionKm.z - a.positionKm.z;
+          const d = Math.hypot(rx, ry, rz);
+          if (d < minSeparationKm) minSeparationKm = d;
+
+          if (d < 1400) {
+            riskPairs.push({ satA: a, satB: b, distanceKm: d, critical: d < 500 });
+          }
+
+          if (d <= COLLISION_RADIUS_KM && !collidedPair) {
+            const reqDt = estimateRequiredDeltaSec(a, b);
+            collidedPair = { satA: a, satB: b, distanceKm: d, requiredDeltaSec: reqDt };
+          }
+        }
+      }
+
+      return { collidedPair, minSeparationKm, riskPairs };
+    }
+
+    function evaluatePuzzlePlan(placedZones, levelCfg, dt = 0.05) {
+      const sats = levelCfg.satellites.map((sc) => createSatStateFromCfg(sc));
+      const targetSimSec = (ORBIT_ARC_UNITS / levelCfg.satellites[0].baseSpeed) * TARGET_PERIODS;
+      const pairA = sats.find((s) => s.id === levelCfg.collisionPairIds[0]);
+      const pairB = sats.find((s) => s.id === levelCfg.collisionPairIds[1]);
+      const nodePos = computeSatKinematics(pairA.altitudeKm, 0, levelCfg.collisionNodeLatLon.lon, 0, pairA.baseSpeed).positionKm;
+
+      let t = 0;
+      let globalMinSepKm = Infinity;
+      let firstPairCpaKm = Infinity;
+      let firstPairCpaSec = levelCfg.predictedCollisionSec;
+      let reqDtAtClose = 0.275;
+
+      let bestNodeDistA = Infinity, prevDistA = Infinity, tNodeA = levelCfg.predictedCollisionSec, sampleA = null;
+      let bestNodeDistB = Infinity, prevDistB = Infinity, tNodeB = levelCfg.predictedCollisionSec, sampleB = null;
+      let firstCollision = null;
+      const baselineT = levelCfg.predictedCollisionSec;
+      const windowMin = Math.max(0, baselineT - 6.0);
+      const windowMax = baselineT + 6.0;
+
+      while (t < targetSimSec - 1e-6) {
+        const step = Math.min(dt, targetSimSec - t);
+        t += step;
+        const res = stepPuzzleSimulation(sats, placedZones, step);
+        if (res.minSeparationKm < globalMinSepKm) globalMinSepKm = res.minSeparationKm;
+
+        if (t >= windowMin && t <= windowMax) {
+          const dNodeA = Math.hypot(pairA.positionKm.x - nodePos.x, pairA.positionKm.y - nodePos.y, pairA.positionKm.z - nodePos.z);
+          if (sampleA && sampleA.next === Infinity) {
+            sampleA.next = dNodeA;
+            const denom = 2 * (sampleA.prev - 2 * sampleA.min + sampleA.next);
+            if (Math.abs(denom) > 1e-6) tNodeA = sampleA.t + ((sampleA.prev - sampleA.next) / denom) * step;
+          }
+          if (dNodeA < bestNodeDistA) {
+            bestNodeDistA = dNodeA;
+            tNodeA = t;
+            sampleA = { prev: prevDistA, min: dNodeA, t, next: Infinity };
+          }
+          prevDistA = dNodeA;
+
+          const dNodeB = Math.hypot(pairB.positionKm.x - nodePos.x, pairB.positionKm.y - nodePos.y, pairB.positionKm.z - nodePos.z);
+          if (sampleB && sampleB.next === Infinity) {
+            sampleB.next = dNodeB;
+            const denom = 2 * (sampleB.prev - 2 * sampleB.min + sampleB.next);
+            if (Math.abs(denom) > 1e-6) tNodeB = sampleB.t + ((sampleB.prev - sampleB.next) / denom) * step;
+          }
+          if (dNodeB < bestNodeDistB) {
+            bestNodeDistB = dNodeB;
+            tNodeB = t;
+            sampleB = { prev: prevDistB, min: dNodeB, t, next: Infinity };
+          }
+          prevDistB = dNodeB;
+
+          const pairDist = Math.hypot(pairB.positionKm.x - pairA.positionKm.x, pairB.positionKm.y - pairA.positionKm.y, pairB.positionKm.z - pairA.positionKm.z);
+          if (pairDist < firstPairCpaKm) {
+            firstPairCpaKm = pairDist;
+            firstPairCpaSec = t;
+            reqDtAtClose = estimateRequiredDeltaSec(pairA, pairB);
+          }
+        }
+
+        if (res.collidedPair && !firstCollision) {
+          firstCollision = {
+            t,
+            period: t / res.collidedPair.satA.periodSec,
+            pairIds: [res.collidedPair.satA.id, res.collidedPair.satB.id],
+            distanceKm: res.collidedPair.distanceKm,
+            reqDt: res.collidedPair.requiredDeltaSec,
+          };
+          if (t > windowMax) break;
+        }
+        if (firstCollision && t > windowMax) break;
+      }
+
+      const sat1DeltaSec = tNodeA - baselineT;
+      const sat2DeltaSec = tNodeB - baselineT;
+      const arrivalDeltaSec = Math.abs(tNodeA - tNodeB);
+
+      if (firstCollision) {
+        return {
+          survived: false,
+          firstClosePassSec: firstCollision.t,
+          firstPeriod: firstCollision.period,
+          firstPairMinSepKm: firstCollision.t <= windowMax ? firstPairCpaKm : firstCollision.distanceKm,
+          globalMinSepKm: firstCollision.distanceKm,
+          arrivalDeltaSec,
+          requiredDeltaSec: firstCollision.reqDt,
+          sat1DeltaSec,
+          sat2DeltaSec,
+          collidedPairIds: firstCollision.pairIds,
+        };
+      }
+
+      return {
+        survived: true,
+        firstClosePassSec: firstPairCpaSec,
+        firstPeriod: TARGET_PERIODS,
+        firstPairMinSepKm: firstPairCpaKm,
+        globalMinSepKm,
+        arrivalDeltaSec,
+        requiredDeltaSec: reqDtAtClose,
+        sat1DeltaSec,
+        sat2DeltaSec,
+        collidedPairIds: null,
+      };
+    }
+
+    function findSatellitesCrossingCell(satellites, row, col) {
+      const tempZone = {
+        latMin: GRID_LAT_MIN + row * CELL_DEG,
+        latMax: GRID_LAT_MIN + (row + 1) * CELL_DEG,
+        lonStart: -180 + col * CELL_DEG,
+      };
+      const hits = [];
+      for (const sat of satellites) {
+        for (let deg = 0; deg < 360; deg += 3) {
+          const kin = computeSatKinematics(sat.altitudeKm, sat.inclinationDeg, sat.raanDeg, deg, sat.baseSpeed);
+          if (isLatLonInGridCell(kin.latDeg, kin.lonDeg, tempZone)) {
+            hits.push({ sat, entryPhaseDeg: deg });
+            break;
+          }
+        }
+      }
+      return hits;
+    }
+
+    /* =========================================================================
+     * MODULE 2: PROCEDURAL EARTH TEXTURES WITH 20°×20° PUZZLE GRID
+     * ========================================================================= */
+    const CONTINENT_POLYGONS = [
+      [[-168,66],[-162,70],[-140,70],[-124,70],[-105,68],[-92,63],[-80,62],[-64,60],[-55,52],[-60,45],[-70,42],[-75,35],[-81,25],[-83,30],[-90,29],[-97,26],[-97,19],[-88,16],[-83,10],[-78,8],[-84,11],[-93,15],[-105,20],[-110,24],[-117,32],[-124,41],[-125,49],[-135,57],[-152,60],[-165,61]],
+      [[-52,60],[-42,61],[-32,68],[-18,75],[-22,82],[-42,83],[-62,78],[-56,70]],
+      [[-78,9],[-70,12],[-60,8],[-50,1],[-35,-6],[-38,-14],[-42,-23],[-52,-33],[-62,-40],[-67,-54],[-74,-52],[-73,-40],[-71,-20],[-81,-5],[-79,2]],
+      [[-9,37],[-9,43],[-2,43],[-4,48],[2,51],[8,54],[10,58],[5,61],[14,68],[28,71],[32,66],[26,60],[20,55],[14,54],[14,46],[18,41],[14,38],[10,44],[4,43],[-5,36]],
+      [[-6,50],[2,51],[0,56],[-5,58],[-8,54]],
+      [[-17,15],[-13,28],[-6,36],[10,37],[25,32],[33,31],[43,12],[51,11],[41,-2],[40,-14],[33,-26],[20,-35],[15,-28],[12,-15],[9,-1],[4,5],[-8,5],[-16,11]],
+      [[44,-25],[47,-25],[50,-15],[48,-12],[44,-18]],
+      [[27,41],[35,37],[36,30],[44,13],[59,22],[50,30],[60,25],[68,23],[77,8],[82,16],[89,22],[98,16],[101,3],[105,10],[109,21],[118,24],[122,31],[120,38],[129,36],[132,43],[141,53],[160,60],[176,66],[168,70],[135,72],[105,76],[78,72],[60,69],[42,66],[32,66],[28,58],[38,47],[40,42]],
+      [[130,32],[135,34],[141,38],[145,44],[140,43],[136,37],[131,34]],
+      [[96,5],[104,-5],[106,-6],[114,-8],[114,-7],[105,-4],[99,3]],
+      [[109,-2],[117,-3],[119,4],[116,7],[111,2]],
+      [[132,-2],[141,-2],[150,-9],[144,-9],[135,-5]],
+      [[114,-22],[122,-17],[131,-12],[136,-12],[142,-11],[146,-18],[153,-26],[150,-37],[140,-38],[135,-34],[128,-32],[115,-34],[113,-27]],
+      [[167,-46],[172,-43],[178,-37],[174,-36],[171,-41],[166,-45]],
+      [[-180,-72],[-140,-74],[-100,-73],[-60,-65],[-30,-72],[10,-70],[60,-68],[110,-66],[150,-69],[180,-72],[180,-90],[-180,-90]],
+    ];
+
+    function generateEarthTextures(maxAnisotropy) {
+      const w = 2048, h = 1024;
+      const lonToX = (lon) => ((lon + 180) / 360) * w;
+      const latToY = (lat) => ((90 - lat) / 180) * h;
+
+      const colorCanvas = document.createElement('canvas');
+      colorCanvas.width = w; colorCanvas.height = h;
+      const ctx = colorCanvas.getContext('2d');
+
+      const oceanGrad = ctx.createLinearGradient(0, 0, 0, h);
+      oceanGrad.addColorStop(0.0, '#132a45');
+      oceanGrad.addColorStop(0.22, '#0d233d');
+      oceanGrad.addColorStop(0.5, '#0b1e36');
+      oceanGrad.addColorStop(0.78, '#0d233d');
+      oceanGrad.addColorStop(1.0, '#162f4d');
+      ctx.fillStyle = oceanGrad;
+      ctx.fillRect(0, 0, w, h);
+
+      const drawPoly = (poly) => {
+        ctx.beginPath();
+        for (let i = 0; i < poly.length; i++) {
+          const px = lonToX(poly[i][0]), py = latToY(poly[i][1]);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      };
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(30, 100, 145, 0.42)';
+      ctx.lineWidth = 14;
+      ctx.lineJoin = 'round';
+      for (const poly of CONTINENT_POLYGONS) { drawPoly(poly); ctx.stroke(); }
+      ctx.restore();
+
+      const landGrad = ctx.createLinearGradient(0, 0, 0, h);
+      landGrad.addColorStop(0.0, '#cbd5e1');
+      landGrad.addColorStop(0.14, '#5a7866');
+      landGrad.addColorStop(0.32, '#416a52');
+      landGrad.addColorStop(0.45, '#7c7456');
+      landGrad.addColorStop(0.55, '#3b6a4e');
+      landGrad.addColorStop(0.72, '#6d6b52');
+      landGrad.addColorStop(0.86, '#587265');
+      landGrad.addColorStop(0.93, '#dbeafe');
+      landGrad.addColorStop(1.0, '#e2e8f0');
+
+      for (const poly of CONTINENT_POLYGONS) {
+        drawPoly(poly);
+        ctx.fillStyle = landGrad;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(186, 230, 253, 0.72)';
+        ctx.lineWidth = 2.0;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+      }
+
+      // 20°×20° Grid Lines
+      for (let lon = -180; lon <= 180; lon += CELL_DEG) {
+        const x = lonToX(lon);
+        const isPrime = lon === 0;
+        ctx.strokeStyle = isPrime ? 'rgba(56, 189, 248, 0.65)' : 'rgba(148, 163, 184, 0.34)';
+        ctx.lineWidth = isPrime ? 2.4 : 1.3;
+        ctx.beginPath();
+        ctx.moveTo(x, latToY(80));
+        ctx.lineTo(x, latToY(-80));
+        ctx.stroke();
+      }
+      for (let lat = GRID_LAT_MIN; lat <= GRID_LAT_MAX; lat += CELL_DEG) {
+        const y = latToY(lat);
+        const isEq = lat === 0;
+        ctx.strokeStyle = isEq ? 'rgba(56, 189, 248, 0.7)' : 'rgba(148, 163, 184, 0.34)';
+        ctx.lineWidth = isEq ? 2.6 : 1.3;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+
+      // Subtle Row/Col labels at 40° intervals for clean deduction
+      ctx.font = '600 13px "JetBrains Mono", monospace';
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.76)';
+      ctx.textBaseline = 'bottom';
+      for (let lon = -160; lon <= 160; lon += 40) {
+        const label = lon === 0 ? '0°' : lon > 0 ? `${lon}°E` : `${Math.abs(lon)}°W`;
+        ctx.fillText(label, lonToX(lon) + 5, latToY(0) - 4);
+      }
+      for (const lat of [-60, -40, -20, 20, 40, 60]) {
+        const label = lat > 0 ? `${lat}°N` : `${Math.abs(lat)}°S`;
+        for (const baseLon of [-120, -40, 40, 120]) {
+          ctx.fillText(label, lonToX(baseLon) + 5, latToY(lat) - 4);
+        }
+      }
+
+      const dataW = 1024, dataH = 512;
+      const roughCanvas = document.createElement('canvas');
+      roughCanvas.width = dataW; roughCanvas.height = dataH;
+      const rCtx = roughCanvas.getContext('2d');
+      rCtx.fillStyle = '#5c5c5c'; rCtx.fillRect(0, 0, dataW, dataH);
+
+      const bumpCanvas = document.createElement('canvas');
+      bumpCanvas.width = dataW; bumpCanvas.height = dataH;
+      const bCtx = bumpCanvas.getContext('2d');
+      bCtx.fillStyle = '#303030'; bCtx.fillRect(0, 0, dataW, dataH);
+
+      for (const poly of CONTINENT_POLYGONS) {
+        rCtx.beginPath(); bCtx.beginPath();
+        for (let i = 0; i < poly.length; i++) {
+          const px = ((poly[i][0] + 180) / 360) * dataW;
+          const py = ((90 - poly[i][1]) / 180) * dataH;
+          if (i === 0) { rCtx.moveTo(px, py); bCtx.moveTo(px, py); }
+          else { rCtx.lineTo(px, py); bCtx.lineTo(px, py); }
+        }
+        rCtx.closePath(); bCtx.closePath();
+        rCtx.fillStyle = '#dbdbdb'; rCtx.fill();
+        bCtx.fillStyle = '#9a9a9a'; bCtx.fill();
+      }
+
+      const mapTex = new THREE.CanvasTexture(colorCanvas);
+      mapTex.colorSpace = THREE.SRGBColorSpace;
+      mapTex.anisotropy = maxAnisotropy;
+
+      const roughTex = new THREE.CanvasTexture(roughCanvas);
+      roughTex.anisotropy = maxAnisotropy;
+
+      const bumpTex = new THREE.CanvasTexture(bumpCanvas);
+      bumpTex.anisotropy = maxAnisotropy;
+
+      return { mapTex, roughTex, bumpTex };
+    }
+
+    function generateZoneBandTexture(colorHexStr, effectPct) {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 128;
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, 256, 128);
+      ctx.fillStyle = colorHexStr + '30';
+      ctx.fillRect(0, 0, 256, 128);
+      ctx.fillStyle = colorHexStr + 'dd';
+      ctx.fillRect(0, 0, 256, 5);
+      ctx.fillRect(0, 123, 256, 5);
+      ctx.strokeStyle = colorHexStr + 'aa';
+      ctx.lineWidth = 3;
+      const dir = effectPct >= 0 ? 1 : -1;
+      for (let x = 28; x < 256; x += 48) {
+        ctx.beginPath();
+        ctx.moveTo(x - 10 * dir, 36);
+        ctx.lineTo(x + 8 * dir, 64);
+        ctx.lineTo(x - 10 * dir, 92);
+        ctx.stroke();
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      return tex;
+    }
+
+    function generateSolarPanelTexture() {
+      const c = document.createElement('canvas');
+      c.width = 128; c.height = 64;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#0f294a'; ctx.fillRect(0, 0, 128, 64);
+      ctx.strokeStyle = '#38bdf8'; ctx.globalAlpha = 0.45; ctx.lineWidth = 1;
+      for (let x = 0; x <= 128; x += 16) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 64); ctx.stroke(); }
+      for (let y = 0; y <= 64; y += 16) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(128, y); ctx.stroke(); }
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    /* =========================================================================
+     * MODULE 3: 3D GEOMETRY BUILDERS (GRID, ZONES, L-ARCS, SATELLITES)
+     * ========================================================================= */
+    function createSphericalPatchGeometry(latMinDeg, latMaxDeg, lonStartDeg, arcLenDeg, radius, latSegs = 8, lonSegs = 12) {
+      const positions = [], uvs = [], indices = [];
+      const p = { x: 0, y: 0, z: 0 };
+      for (let iy = 0; iy <= latSegs; iy++) {
+        const v = iy / latSegs;
+        const lat = latMinDeg + v * (latMaxDeg - latMinDeg);
+        for (let ix = 0; ix <= lonSegs; ix++) {
+          const u = ix / lonSegs;
+          const lon = lonStartDeg + u * arcLenDeg;
+          latLonToEcef(lat, lon, radius, p);
+          positions.push(p.x, p.y, p.z);
+          uvs.push(u, v);
+        }
+      }
+      const stride = lonSegs + 1;
+      for (let iy = 0; iy < latSegs; iy++) {
+        for (let ix = 0; ix < lonSegs; ix++) {
+          const a = iy * stride + ix, b = a + 1, c = a + stride, d = c + 1;
+          indices.push(a, b, d, a, d, c);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      return geo;
+    }
+
+    function createSphericalPerimeterLine(latMinDeg, latMaxDeg, lonStartDeg, arcLenDeg, radius, colorHex, opacity = 0.96) {
+      const pts = [];
+      const p = { x: 0, y: 0, z: 0 };
+      const stepsLon = 18, stepsLat = 8;
+      for (let i = 0; i <= stepsLon; i++) {
+        latLonToEcef(latMinDeg, lonStartDeg + (i / stepsLon) * arcLenDeg, radius, p);
+        pts.push(new THREE.Vector3(p.x, p.y, p.z));
+      }
+      for (let i = 1; i <= stepsLat; i++) {
+        latLonToEcef(latMinDeg + (i / stepsLat) * (latMaxDeg - latMinDeg), lonStartDeg + arcLenDeg, radius, p);
+        pts.push(new THREE.Vector3(p.x, p.y, p.z));
+      }
+      for (let i = 1; i <= stepsLon; i++) {
+        latLonToEcef(latMaxDeg, lonStartDeg + (1 - i / stepsLon) * arcLenDeg, radius, p);
+        pts.push(new THREE.Vector3(p.x, p.y, p.z));
+      }
+      for (let i = 1; i <= stepsLat; i++) {
+        latLonToEcef(latMaxDeg - (i / stepsLat) * (latMaxDeg - latMinDeg), lonStartDeg, radius, p);
+        pts.push(new THREE.Vector3(p.x, p.y, p.z));
+      }
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      const mat = new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity });
+      return new THREE.Line(geo, mat);
+    }
+
+    function buildOrbitalGridWireframe() {
+      const pts = [];
+      const r = EARTH_VISUAL_RADIUS + 0.024;
+      const p = { x: 0, y: 0, z: 0 };
+      for (let lon = -180; lon < 180; lon += CELL_DEG) {
+        for (let lat = GRID_LAT_MIN; lat < GRID_LAT_MAX; lat += 10) {
+          latLonToEcef(lat, lon, r, p); pts.push(p.x, p.y, p.z);
+          latLonToEcef(lat + 10, lon, r, p); pts.push(p.x, p.y, p.z);
+        }
+      }
+      for (let lat = GRID_LAT_MIN; lat <= GRID_LAT_MAX; lat += CELL_DEG) {
+        for (let lon = -180; lon < 180; lon += 10) {
+          latLonToEcef(lat, lon, r, p); pts.push(p.x, p.y, p.z);
+          latLonToEcef(lat, lon + 10, r, p); pts.push(p.x, p.y, p.z);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.2 });
+      return new THREE.LineSegments(geo, mat);
+    }
+
+    // Build translucent 3D orbital arc segment of exact length L along an intersecting satellite's track
+    function buildActiveArcSegment(sat, startDeg, lengthUnits, colorHex, isPreview) {
+      const segs = 36;
+      const pts = [];
+      for (let i = 0; i <= segs; i++) {
+        const deg = (startDeg + (i / segs) * lengthUnits) % 360;
+        const kin = computeSatKinematics(sat.altitudeKm, sat.inclinationDeg, sat.raanDeg, deg, sat.baseSpeed);
+        pts.push(new THREE.Vector3(kin.positionKm.x / KM_PER_UNIT, kin.positionKm.y / KM_PER_UNIT, kin.positionKm.z / KM_PER_UNIT));
+      }
+      const curve = new THREE.CatmullRomCurve3(pts);
+      const geo = new THREE.TubeGeometry(curve, 28, isPreview ? 0.055 : 0.048, 8, false);
+      const mat = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: isPreview ? 0.72 : 0.65 });
+      return new THREE.Mesh(geo, mat);
+    }
+
+    function buildPlacedZoneMesh(zone, satellites, isPreview = false) {
+      const group = new THREE.Group();
+      const surfaceR = EARTH_VISUAL_RADIUS + (isPreview ? 0.042 : 0.032);
+      const orbitShellR = EARTH_VISUAL_RADIUS + (540 / KM_PER_UNIT);
+      const bandTex = generateZoneBandTexture(zone.color, zone.effectPct);
+
+      // 1. Snapped 20°×20° Ground Footprint Patch + Border
+      const groundGeo = createSphericalPatchGeometry(zone.latMin, zone.latMax, zone.lonStart, CELL_DEG, surfaceR);
+      const groundMat = new THREE.MeshBasicMaterial({
+        color: zone.colorHex,
+        transparent: true,
+        opacity: isPreview ? 0.34 : 0.22,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+      groundMesh.renderOrder = 3;
+      group.add(groundMesh);
+      group.add(createSphericalPerimeterLine(zone.latMin, zone.latMax, zone.lonStart, CELL_DEG, surfaceR + 0.008, zone.colorHex, isPreview ? 1.0 : 0.95));
+
+      // 2. Orbital Corridor Shell Patch + Border
+      const shellGeo = createSphericalPatchGeometry(zone.latMin, zone.latMax, zone.lonStart, CELL_DEG, orbitShellR);
+      const shellMat = new THREE.MeshBasicMaterial({
+        map: bandTex,
+        transparent: true,
+        opacity: isPreview ? 0.78 : 0.64,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const shellMesh = new THREE.Mesh(shellGeo, shellMat);
+      shellMesh.renderOrder = 4;
+      group.add(shellMesh);
+      group.add(createSphericalPerimeterLine(zone.latMin, zone.latMax, zone.lonStart, CELL_DEG, orbitShellR + 0.008, zone.colorHex, 1.0));
+
+      // 3. Four corner vertical posts linking surface grid cell to orbital altitude shell
+      const corners = [
+        [zone.latMin, zone.lonStart],
+        [zone.latMin, zone.lonStart + CELL_DEG],
+        [zone.latMax, zone.lonStart],
+        [zone.latMax, zone.lonStart + CELL_DEG],
+      ];
+      const postPts = [];
+      const a = { x: 0, y: 0, z: 0 }, b = { x: 0, y: 0, z: 0 };
+      for (const [lat, lon] of corners) {
+        latLonToEcef(lat, lon, surfaceR, a);
+        latLonToEcef(lat, lon, orbitShellR, b);
+        postPts.push(new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z));
+      }
+      group.add(new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints(postPts),
+        new THREE.LineBasicMaterial({ color: zone.colorHex, transparent: true, opacity: 0.65 })
+      ));
+
+      // 4. Exact L-unit active arc segments along any intersecting satellite orbits
+      const crossing = findSatellitesCrossingCell(satellites, zone.row, zone.col);
+      for (const hit of crossing) {
+        group.add(buildActiveArcSegment(hit.sat, hit.entryPhaseDeg, zone.lengthUnits, zone.colorHex, isPreview));
+      }
+
+      const centerPos = latLonToEcef((zone.latMin + zone.latMax) * 0.5, zone.lonStart + CELL_DEG * 0.5, orbitShellR + 0.22);
+      group.userData = {
+        zone,
+        bandTex,
+        labelAnchor: new THREE.Vector3(centerPos.x, centerPos.y, centerPos.z),
+      };
+      return group;
+    }
+
+    function disposeGroup(group) {
+      group.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (obj.material.map) obj.material.map.dispose();
+          obj.material.dispose();
+        }
+      });
+    }
+
+    function buildClosedGroundTrackRibbon(satCfg, radius, halfWidth, opacity, dashed = false) {
+      const segs = 144;
+      const pts = [];
+      const p = { x: 0, y: 0, z: 0 };
+      for (let i = 0; i <= segs; i++) {
+        const deg = (i / segs) * 360;
+        const kin = computeSatKinematics(satCfg.altitudeKm, satCfg.inclinationDeg, satCfg.raanDeg, deg, satCfg.baseSpeed);
+        latLonToEcef(kin.latDeg, kin.lonDeg, radius, p);
+        pts.push(new THREE.Vector3(p.x, p.y, p.z));
+      }
+
+      const positions = new Float32Array((segs + 1) * 2 * 3);
+      const indices = [];
+      const tan = new THREE.Vector3(), norm = new THREE.Vector3(), side = new THREE.Vector3();
+
+      for (let i = 0; i <= segs; i++) {
+        const cur = pts[i];
+        const next = pts[Math.min(segs, i + 1)];
+        const prev = pts[Math.max(0, i - 1)];
+        tan.subVectors(next, prev).normalize();
+        norm.copy(cur).normalize();
+        side.crossVectors(norm, tan).normalize().multiplyScalar(halfWidth);
+
+        const base = i * 6;
+        positions[base]     = cur.x - side.x;
+        positions[base + 1] = cur.y - side.y;
+        positions[base + 2] = cur.z - side.z;
+        positions[base + 3] = cur.x + side.x;
+        positions[base + 4] = cur.y + side.y;
+        positions[base + 5] = cur.z + side.z;
+
+        if (i < segs) {
+          if (dashed && i % 3 === 2) continue;
+          const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+          indices.push(a, b, c, b, d, c);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setIndex(indices);
+      const mat = new THREE.MeshBasicMaterial({
+        color: satCfg.colorHex,
+        transparent: true,
+        opacity,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = 3;
+      return mesh;
+    }
+
+    function createSatelliteFactory(solarTex) {
+      const goldFoilMat = new THREE.MeshStandardMaterial({ color: 0xd4a442, metalness: 0.85, roughness: 0.28 });
+      const thermalWhiteMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.12, roughness: 0.78 });
+      const gunmetalMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.88, roughness: 0.34 });
+      const lensGlassMat = new THREE.MeshStandardMaterial({ color: 0x0ea5e9, metalness: 0.2, roughness: 0.12, emissive: 0x0369a1, emissiveIntensity: 0.35 });
+      const solarMat = new THREE.MeshStandardMaterial({ map: solarTex, color: 0xffffff, metalness: 0.35, roughness: 0.22 });
+
+      const busGeo = new THREE.CylinderGeometry(0.088, 0.098, 0.18, 8); busGeo.rotateX(Math.PI / 2);
+      const shroudGeo = new THREE.CylinderGeometry(0.056, 0.074, 0.08, 12); shroudGeo.rotateX(Math.PI / 2);
+      const lensGeo = new THREE.CylinderGeometry(0.036, 0.042, 0.04, 12);
+      const dishGeo = new THREE.LatheGeometry([new THREE.Vector2(0.004, 0), new THREE.Vector2(0.035, 0.012), new THREE.Vector2(0.068, 0.034)], 14);
+      const boomGeo = new THREE.CylinderGeometry(0.009, 0.009, 0.56, 6); boomGeo.rotateZ(Math.PI / 2);
+      const panelGeo = new THREE.BoxGeometry(0.24, 0.012, 0.11);
+      const nozzleGeo = new THREE.CylinderGeometry(0.022, 0.042, 0.06, 10); nozzleGeo.rotateX(Math.PI / 2);
+      const beaconRingGeo = new THREE.TorusGeometry(0.15, 0.013, 8, 24);
+
+      return function buildCompositeSatellite(cfg) {
+        const root = new THREE.Group();
+        root.add(new THREE.Mesh(busGeo, goldFoilMat));
+        const shroud = new THREE.Mesh(shroudGeo, thermalWhiteMat); shroud.position.z = 0.12; root.add(shroud);
+        const lens = new THREE.Mesh(lensGeo, lensGlassMat); lens.position.y = -0.095; root.add(lens);
+        const dish = new THREE.Mesh(dishGeo, thermalWhiteMat); dish.position.set(0, 0.09, -0.02); root.add(dish);
+        root.add(new THREE.Mesh(boomGeo, gunmetalMat));
+        const leftWing = new THREE.Mesh(panelGeo, solarMat); leftWing.position.set(-0.24, 0, 0); root.add(leftWing);
+        const rightWing = new THREE.Mesh(panelGeo, solarMat); rightWing.position.set(0.24, 0, 0); root.add(rightWing);
+        const nozzle = new THREE.Mesh(nozzleGeo, gunmetalMat); nozzle.position.z = -0.115; root.add(nozzle);
+        const ringMat = new THREE.MeshBasicMaterial({ color: cfg.colorHex, transparent: true, opacity: 0.9 });
+        const beaconRing = new THREE.Mesh(beaconRingGeo, ringMat); beaconRing.rotation.x = Math.PI / 2; root.add(beaconRing);
+        return root;
+      };
+    }
+
+    /* =========================================================================
+     * MODULE 4: PROCEDURAL WEB AUDIO ENGINE
+     * ========================================================================= */
+    class PuzzleAudio {
+      constructor() {
+        this.enabled = true;
+        this.ctx = null;
+      }
+
+      ensureCtx() {
+        if (!this.enabled) return null;
+        if (!this.ctx) {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (AudioCtx) this.ctx = new AudioCtx();
+        }
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
+        }
+        return this.ctx;
+      }
+
+      playNote(freq, startOffset, duration, type = 'sine', peakGain = 0.08) {
+        const ctx = this.ensureCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime + startOffset;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, now);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(peakGain, now + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + duration + 0.03);
+      }
+
+      playSnap() {
+        this.playNote(520, 0, 0.08, 'triangle', 0.07);
+        this.playNote(780, 0.04, 0.09, 'sine', 0.05);
+      }
+
+      playRemove() {
+        this.playNote(340, 0, 0.09, 'triangle', 0.06);
+      }
+
+      playRunStart() {
+        this.playNote(440, 0, 0.11, 'sine', 0.06);
+        this.playNote(660, 0.08, 0.14, 'sine', 0.06);
+      }
+
+      playCollisionFail() {
+        this.playNote(210, 0, 0.24, 'sawtooth', 0.07);
+        this.playNote(145, 0.12, 0.32, 'triangle', 0.08);
+      }
+
+      playLevelComplete() {
+        this.playNote(523.25, 0.00, 0.22, 'sine', 0.09);
+        this.playNote(659.25, 0.11, 0.24, 'sine', 0.09);
+        this.playNote(783.99, 0.22, 0.28, 'sine', 0.09);
+        this.playNote(1046.50, 0.34, 0.52, 'triangle', 0.10);
+      }
+    }
+
+    /* =========================================================================
+     * MODULE 5: THREE.JS SCENE, RENDERER & SOFTWARE-WEBGL GUARD
+     * ========================================================================= */
+    const viewportRoot = document.getElementById('viewport-root');
+    const worldLabelsEl = document.getElementById('world-labels');
+    const dragGhostEl = document.getElementById('drag-ghost');
+
+    const isSoftwareGl = (() => {
+      try {
+        const probeCanvas = document.createElement('canvas');
+        const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
+        if (!gl) return true;
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
+        const gpu = String(gl.getParameter(param) || '');
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
+        return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+      } catch {
+        return true;
+      }
+    })();
+
+    const renderer = new THREE.WebGLRenderer({ antialias: !isSoftwareGl, powerPreference: 'high-performance' });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
+    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = !isSoftwareGl;
+    viewportRoot.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050811);
+    scene.fog = new THREE.FogExp2(0x050811, 0.0085);
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmremGenerator.dispose();
+
+    const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 240);
+    // Directly face western hemisphere & Atlantic (-72°W) with generous bottom-left margin above compact dock
+    const DEFAULT_CAM_POS = new THREE.Vector3(5.6, 4.0, 18.0);
+    const DEFAULT_TARGET = new THREE.Vector3(0, -1.25, 0);
+    camera.position.copy(DEFAULT_CAM_POS);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = !isSoftwareGl;
+    controls.dampingFactor = 0.06;
+    controls.enablePan = false;
+    controls.minDistance = 8.4;
+    controls.maxDistance = 30.0;
+    controls.target.copy(DEFAULT_TARGET);
+
+    const sunLight = new THREE.DirectionalLight(0xfff4e0, 2.35);
+    sunLight.position.set(18, 12, 20);
+    scene.add(sunLight);
+    scene.add(new THREE.HemisphereLight(0x88b8f0, 0x162238, 0.88));
+    const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.72);
+    rimLight.position.set(-18, -8, -16);
+    scene.add(rimLight);
+
+    // Subtle crisp starfield
+    (() => {
+      const count = 800;
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+      const c = new THREE.Color();
+      for (let i = 0; i < count; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = 68 + Math.random() * 48;
+        positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = r * Math.cos(phi);
+        positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+        c.setHSL(0.58 + (Math.random() - 0.5) * 0.1, 0.25, 0.65 + Math.random() * 0.35);
+        colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.2, vertexColors: true, transparent: true, opacity: 0.8 })));
+    })();
+
+    const maxAniso = renderer.capabilities.getMaxAnisotropy();
+    const { mapTex, roughTex, bumpTex } = generateEarthTextures(maxAniso);
+    const earthMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(EARTH_VISUAL_RADIUS, 72, 48),
+      new THREE.MeshStandardMaterial({
+        map: mapTex,
+        roughnessMap: roughTex,
+        bumpMap: bumpTex,
+        bumpScale: 0.032,
+        color: 0xffffff,
+        metalness: 0.08,
+        roughness: 1.0,
+      })
+    );
+    scene.add(earthMesh);
+
+    const gridWireframe = buildOrbitalGridWireframe();
+    scene.add(gridWireframe);
+
+    const atmoMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(EARTH_VISUAL_RADIUS * 1.032, 48, 32),
+      new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: new THREE.Color(0x38bdf8) } },
+        vertexShader: `
+          varying vec3 vNormal; varying vec3 vViewDir;
+          void main() {
+            vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+            vNormal = normalize(normalMatrix * normal);
+            vViewDir = normalize(-mvPos.xyz);
+            gl_Position = projectionMatrix * mvPos;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 uColor; varying vec3 vNormal; varying vec3 vViewDir;
+          void main() {
+            float rim = 1.0 - max(dot(vNormal, vViewDir), 0.0);
+            gl_FragColor = vec4(uColor, pow(rim, 3.2) * 0.56);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    atmoMesh.renderOrder = 5;
+    scene.add(atmoMesh);
+
+    // Invisible Pick Sphere (Layer 2) for grid cell raycasting
+    const pickSphere = new THREE.Mesh(
+      new THREE.SphereGeometry(EARTH_VISUAL_RADIUS + 0.18, 48, 32),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    pickSphere.layers.set(2);
+    scene.add(pickSphere);
+
+    const levelSatGroup = new THREE.Group();
+    scene.add(levelSatGroup);
+    const placedZonesGroup = new THREE.Group();
+    scene.add(placedZonesGroup);
+    const previewZoneGroup = new THREE.Group();
+    scene.add(previewZoneGroup);
+    const riskTetherGroup = new THREE.Group();
+    scene.add(riskTetherGroup);
+
+    // Pre-run static Collision/Clearance Node Marker
+    const collisionMarkerGroup = new THREE.Group();
+    const colRingMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e, transparent: true, opacity: 0.92 });
+    const colCoreMat = new THREE.MeshBasicMaterial({ color: 0xfb7185, wireframe: true });
+    collisionMarkerGroup.add(
+      new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.022, 10, 32), colRingMat),
+      new THREE.Mesh(new THREE.SphereGeometry(0.10, 14, 14), colCoreMat)
+    );
+    scene.add(collisionMarkerGroup);
+
+    const collisionLabelEl = document.createElement('div');
+    collisionLabelEl.className = 'world-label collision-label';
+    worldLabelsEl.appendChild(collisionLabelEl);
+
+    const riskLinePos = new Float32Array(6);
+    const riskLineGeo = new THREE.BufferGeometry();
+    riskLineGeo.setAttribute('position', new THREE.BufferAttribute(riskLinePos, 3));
+    const riskLineMat = new THREE.LineBasicMaterial({ color: 0xf43f5e, transparent: true, opacity: 0.92 });
+    const riskLine = new THREE.Line(riskLineGeo, riskLineMat);
+    riskLine.visible = false;
+    riskLine.frustumCulled = false;
+    riskTetherGroup.add(riskLine);
+
+    const BURST_COUNT = 24;
+    const burstPositions = new Float32Array(BURST_COUNT * 3);
+    const burstGeo = new THREE.BufferGeometry();
+    burstGeo.setAttribute('position', new THREE.BufferAttribute(burstPositions, 3));
+    const burstMat = new THREE.PointsMaterial({ color: 0xfb7185, size: 0.18, transparent: true, opacity: 0 });
+    const burstPoints = new THREE.Points(burstGeo, burstMat);
+    burstPoints.visible = false;
+    scene.add(burstPoints);
+    const burstVels = Array.from({ length: BURST_COUNT }, () => new THREE.Vector3());
+    let burstTimer = 0;
+
+    function triggerBurst(pos) {
+      burstTimer = 1.2;
+      burstPoints.visible = true;
+      for (let i = 0; i < BURST_COUNT; i++) {
+        burstPositions[i * 3] = pos.x;
+        burstPositions[i * 3 + 1] = pos.y;
+        burstPositions[i * 3 + 2] = pos.z;
+        burstVels[i].set((Math.random() - 0.5) * 2.2, (Math.random() - 0.5) * 2.2, (Math.random() - 0.5) * 2.2);
+      }
+      burstGeo.attributes.position.needsUpdate = true;
+    }
+
+    /* =========================================================================
+     * MODULE 6: PUZZLE STATE & STATIC PRE-RUN PREDICTION
+     * ========================================================================= */
+    const audio = new PuzzleAudio();
+    const solarTex = generateSolarPanelTexture();
+    const buildCompositeSatellite = createSatelliteFactory(solarTex);
+
+    const state = {
+      mode: 'title', // 'title' | 'planning' | 'running' | 'failed' | 'victory'
+      level: 1,
+      simSec: 0,
+      speedMultiplier: 1,
+      showGrid: true,
+      hudCollapsed: false,
+      satellites: [],
+      satVisuals: [],
+      placedZones: [],
+      placedZoneVisuals: new Map(),
+      zoneIdCounter: 1,
+      selectedSigns: {
+        'gravity-tide': -0.015,
+        'rad-belt': 0.01,
+      },
+      armedTemplateId: null,
+      hoveredInspect: null,
+      selectedInspect: null,
+      dragging: null,
+      previewMesh: null,
+      previewKey: '',
+      preRunPrediction: null,
+      runMinSepKm: Infinity,
+      cameraTrauma: 0,
+      cameraTransitioning: false,
+      desiredCamPos: DEFAULT_CAM_POS.clone(),
+      desiredTarget: DEFAULT_TARGET.clone(),
+    };
+
+    const dom = {
+      btnLaunch: document.getElementById('btn-launch'),
+      levelSelect: document.getElementById('level-select'),
+      hudLevelTitle: document.getElementById('hud-level-title'),
+      hudPeriod: document.getElementById('hud-period'),
+      hudPeriodFill: document.getElementById('hud-period-fill'),
+      hudPhaseStatus: document.getElementById('hud-phase-status'),
+      hudForecast: document.getElementById('hud-forecast'),
+      btnToggleGrid: document.getElementById('btn-toggle-grid'),
+      btnMute: document.getElementById('btn-mute'),
+      btnResetCam: document.getElementById('btn-reset-cam'),
+      dockShell: document.getElementById('dock-shell'),
+      dockPanel: document.getElementById('dock-panel'),
+      btnCollapseHud: document.getElementById('btn-collapse-hud'),
+      zonePalette: document.getElementById('zone-palette'),
+      collisionCourseMeta: document.getElementById('collision-course-meta'),
+      satTable: document.getElementById('sat-table'),
+      placedList: document.getElementById('placed-list'),
+      simTimeMeta: document.getElementById('sim-time-meta'),
+      btnRun: document.getElementById('btn-run'),
+      btnResetSim: document.getElementById('btn-reset-sim'),
+      btnClearZones: document.getElementById('btn-clear-zones'),
+      speedPills: document.getElementById('speed-pills'),
+      predDeltaReadout: document.getElementById('pred-delta-readout'),
+      infoPopover: document.getElementById('info-popover'),
+      popoverTitle: document.getElementById('popover-title'),
+      popoverBadge: document.getElementById('popover-badge'),
+      popoverBody: document.getElementById('popover-body'),
+      popoverFormula: document.getElementById('popover-formula'),
+      failModal: document.getElementById('fail-modal'),
+      failDesc: document.getElementById('fail-desc'),
+      failStatPair: document.getElementById('fail-stat-pair'),
+      failStatDelta: document.getElementById('fail-stat-delta'),
+      failStatT: document.getElementById('fail-stat-t'),
+      btnFailRetry: document.getElementById('btn-fail-retry'),
+      btnFailClear: document.getElementById('btn-fail-clear'),
+      victoryModal: document.getElementById('victory-modal'),
+      victoryTitle: document.getElementById('victory-title'),
+      victoryDesc: document.getElementById('victory-desc'),
+      winStatZones: document.getElementById('win-stat-zones'),
+      winStatSep: document.getElementById('win-stat-sep'),
+      btnNextLevel: document.getElementById('btn-next-level'),
+      btnReplayLevel: document.getElementById('btn-replay-level'),
+    };
+
+    function getEffectForTemplate(tpl) {
+      if (tpl.allowSignFlip && typeof state.selectedSigns[tpl.typeId] === 'number') {
+        return state.selectedSigns[tpl.typeId];
+      }
+      return tpl.defaultEffectPct;
+    }
+
+    function countPlacedByType(typeId) {
+      return state.placedZones.filter((z) => z.typeId === typeId).length;
+    }
+
+    function clearPreviewMesh() {
+      if (state.previewMesh) {
+        previewZoneGroup.remove(state.previewMesh);
+        disposeGroup(state.previewMesh);
+        state.previewMesh = null;
+      }
+      state.previewKey = '';
+    }
+
+    function updatePreviewMesh(template, effectPct, row, col) {
+      const key = `${template.typeId}:${effectPct}:${row}:${col}`;
+      if (key === state.previewKey && state.previewMesh) return;
+      clearPreviewMesh();
+      const previewZone = createPlacedZone(template, row, col, 'preview', effectPct);
+      const mesh = buildPlacedZoneMesh(previewZone, state.satellites, true);
+      previewZoneGroup.add(mesh);
+      state.previewMesh = mesh;
+      state.previewKey = key;
+    }
+
+    function recomputeStaticPrediction() {
+      const cfg = LEVEL_CONFIGS[state.level] || LEVEL_CONFIGS[1];
+      const pred = evaluatePuzzlePlan(state.placedZones, cfg);
+      state.preRunPrediction = pred;
+
+      const p1 = cfg.satellites.find((s) => s.id === cfg.collisionPairIds[0]).code;
+      const p2 = cfg.satellites.find((s) => s.id === cfg.collisionPairIds[1]).code;
+      const nodeShort = cfg.collisionNodeLabel.split(' (')[0];
+      const reqStr = pred.requiredDeltaSec.toFixed(2);
+      const dtStr = pred.arrivalDeltaSec.toFixed(2);
+      const minSepKm = Math.round(Math.min(pred.firstPairMinSepKm, pred.globalMinSepKm));
+
+      if (pred.survived) {
+        colRingMat.color.setHex(0x34d399);
+        colCoreMat.color.setHex(0x34d399);
+        collisionLabelEl.classList.add('clear');
+        collisionLabelEl.textContent = `✓ ${nodeShort} · Δt=${dtStr}s · CLEAR (${minSepKm} km)`;
+        dom.hudForecast.textContent = `Δt ${dtStr}s · Clear (${minSepKm} km)`;
+        dom.hudForecast.className = 'metric-val status-ok';
+        dom.predDeltaReadout.textContent = `Δt ${dtStr}s · Clear`;
+        dom.predDeltaReadout.className = 'status-ok';
+      } else {
+        colRingMat.color.setHex(0xf43f5e);
+        colCoreMat.color.setHex(0xfb7185);
+        collisionLabelEl.classList.remove('clear');
+        const colA = pred.collidedPairIds ? cfg.satellites.find((s) => s.id === pred.collidedPairIds[0])?.code || p1 : p1;
+        const colB = pred.collidedPairIds ? cfg.satellites.find((s) => s.id === pred.collidedPairIds[1])?.code || p2 : p2;
+        const isInitialWindow = pred.firstClosePassSec <= cfg.predictedCollisionSec + 6.0 &&
+          (!pred.collidedPairIds || (pred.collidedPairIds.includes(cfg.collisionPairIds[0]) && pred.collidedPairIds.includes(cfg.collisionPairIds[1])));
+        if (isInitialWindow) {
+          const labelStatus = pred.arrivalDeltaSec > 0.02 ? `RISK (${Math.round(pred.firstPairMinSepKm)} km)` : 'COLLISION';
+          collisionLabelEl.textContent = `× ${nodeShort} · ${p1}/${p2} Δt=${dtStr}s · ${labelStatus}`;
+          dom.hudForecast.textContent = `Δt ${dtStr}s · Collision (${Math.round(pred.firstPairMinSepKm)} km)`;
+          dom.predDeltaReadout.textContent = `Δt ${dtStr} / ${reqStr}s`;
+        } else {
+          const tCol = pred.firstClosePassSec.toFixed(1);
+          collisionLabelEl.textContent = `× ${colA}/${colB} @ t=${tCol}s · COLLISION`;
+          dom.hudForecast.textContent = `${colA}/${colB} @ ${tCol}s · Collision`;
+          dom.predDeltaReadout.textContent = `${colA}/${colB} @ ${tCol}s`;
+        }
+        dom.hudForecast.className = 'metric-val status-fail';
+        dom.predDeltaReadout.className = 'status-fail';
+      }
+    }
+
+    function addPlacedZone(template, row, col, effectPct = getEffectForTemplate(template)) {
+      if (countPlacedByType(template.typeId) >= template.maxCount) return null;
+      const duplicate = state.placedZones.find((z) => z.row === row && z.col === col);
+      if (duplicate) removePlacedZone(duplicate.id, true);
+
+      const id = `zone-${state.zoneIdCounter++}`;
+      const zone = createPlacedZone(template, row, col, id, effectPct);
+      state.placedZones.push(zone);
+
+      const mesh = buildPlacedZoneMesh(zone, state.satellites, false);
+      placedZonesGroup.add(mesh);
+
+      const labelEl = document.createElement('div');
+      labelEl.className = 'world-label zone-label';
+      labelEl.dataset.zoneId = id;
+      labelEl.style.borderColor = zone.color + 'cc';
+      labelEl.style.opacity = '0';
+      labelEl.textContent = zone.mapCode;
+      labelEl.title = `${zone.name} (${zone.mapCode}) · ${formatPct(zone.effectPct)} · L=${zone.lengthUnits}u (Drag to move · Right-click to delete)`;
+      labelEl.addEventListener('pointerenter', () => {
+        state.hoveredInspect = { source: 'placed', zoneId: id };
+        refreshZoneInspector();
+      });
+      labelEl.addEventListener('pointerleave', () => {
+        if (state.hoveredInspect?.zoneId === id) {
+          state.hoveredInspect = null;
+          refreshZoneInspector();
+        }
+      });
+      labelEl.addEventListener('pointerdown', (e) => {
+        if (state.mode !== 'planning' || e.button !== 0) return;
+        e.stopPropagation();
+        e.preventDefault();
+        beginMoveDrag(id, e.clientX, e.clientY);
+      });
+      labelEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (state.mode === 'planning') removePlacedZone(id);
+      });
+      worldLabelsEl.appendChild(labelEl);
+
+      state.placedZoneVisuals.set(id, { mesh, labelEl });
+      state.selectedInspect = { source: 'placed', zoneId: id };
+      audio.playSnap();
+      buildZonePalette();
+      renderPlacedZonesList();
+      recomputeStaticPrediction();
+      updateHudReadouts();
+      updateProjectedLabels();
+      return zone;
+    }
+
+    function rebuildPlacedZoneMesh(zone) {
+      const vis = state.placedZoneVisuals.get(zone.id);
+      if (!vis) return;
+      placedZonesGroup.remove(vis.mesh);
+      disposeGroup(vis.mesh);
+      const nextMesh = buildPlacedZoneMesh(zone, state.satellites, false);
+      placedZonesGroup.add(nextMesh);
+      vis.mesh = nextMesh;
+    }
+
+    function updatePlacedZoneCoords(zone, row, col) {
+      const safeRow = clamp(Math.floor(row), 0, GRID_ROWS - 1);
+      const safeCol = ((Math.floor(col) % GRID_COLS) + GRID_COLS) % GRID_COLS;
+      zone.row = safeRow;
+      zone.col = safeCol;
+      zone.latMin = GRID_LAT_MIN + safeRow * CELL_DEG;
+      zone.latMax = zone.latMin + CELL_DEG;
+      zone.lonStart = -180 + safeCol * CELL_DEG;
+      zone.lonEnd = zone.lonStart + CELL_DEG;
+      rebuildPlacedZoneMesh(zone);
+    }
+
+    function movePlacedZone(zoneId, newRow, newCol) {
+      if (state.mode !== 'planning') return false;
+      const zone = state.placedZones.find((z) => z.id === zoneId);
+      if (!zone) return false;
+      const safeRow = clamp(Math.floor(newRow), 0, GRID_ROWS - 1);
+      const safeCol = ((Math.floor(newCol) % GRID_COLS) + GRID_COLS) % GRID_COLS;
+      if (zone.row === safeRow && zone.col === safeCol) return false;
+
+      const prevRow = zone.row;
+      const prevCol = zone.col;
+      const occupant = state.placedZones.find((z) => z.id !== zoneId && z.row === safeRow && z.col === safeCol);
+      if (occupant) {
+        updatePlacedZoneCoords(occupant, prevRow, prevCol);
+      }
+      updatePlacedZoneCoords(zone, safeRow, safeCol);
+
+      state.selectedInspect = { source: 'placed', zoneId: zone.id };
+      audio.playSnap();
+      renderPlacedZonesList();
+      recomputeStaticPrediction();
+      updateHudReadouts();
+      updateProjectedLabels();
+      refreshZoneInspector();
+      return true;
+    }
+
+    function removePlacedZone(zoneId, silent = false) {
+      if (!silent && state.mode !== 'planning') return;
+      const idx = state.placedZones.findIndex((z) => z.id === zoneId);
+      if (idx === -1) return;
+      state.placedZones.splice(idx, 1);
+      if (state.hoveredInspect?.zoneId === zoneId) state.hoveredInspect = null;
+      if (state.selectedInspect?.zoneId === zoneId) state.selectedInspect = null;
+      const vis = state.placedZoneVisuals.get(zoneId);
+      if (vis) {
+        placedZonesGroup.remove(vis.mesh);
+        disposeGroup(vis.mesh);
+        vis.labelEl.remove();
+        state.placedZoneVisuals.delete(zoneId);
+      }
+      if (!silent) audio.playRemove();
+      buildZonePalette();
+      renderPlacedZonesList();
+      recomputeStaticPrediction();
+      updateHudReadouts();
+      refreshZoneInspector();
+    }
+
+    function clearAllPlacedZones(silent = false) {
+      const ids = state.placedZones.map((z) => z.id);
+      for (const id of ids) removePlacedZone(id, true);
+      state.hoveredInspect = null;
+      state.selectedInspect = null;
+      refreshZoneInspector();
+      if (!silent && ids.length > 0) audio.playRemove();
+    }
+
+    function loadLevel(levelNum, nextMode = 'planning') {
+      state.level = levelNum;
+      document.body.dataset.level = String(levelNum);
+      const cfg = LEVEL_CONFIGS[levelNum] || LEVEL_CONFIGS[1];
+
+      for (const sv of state.satVisuals) sv.labelEl.remove();
+      while (levelSatGroup.children.length > 0) levelSatGroup.remove(levelSatGroup.children[0]);
+      state.satVisuals = [];
+
+      clearAllPlacedZones(true);
+      clearPreviewMesh();
+      state.satellites = cfg.satellites.map((sc) => createSatStateFromCfg(sc));
+
+      const subDiscGeo = new THREE.CircleGeometry(0.08, 16);
+      for (const sat of state.satellites) {
+        const isCollisionPair = cfg.collisionPairIds.includes(sat.id);
+        const isPursuit = cfg.pursuitPairIds ? cfg.pursuitPairIds.includes(sat.id) : false;
+        const isPolarCross = cfg.level === 3 && sat.inclinationDeg === 90;
+        const highlight = isCollisionPair || isPursuit;
+        const mesh = buildCompositeSatellite(sat);
+        levelSatGroup.add(mesh);
+
+        const ringPts = [];
+        for (let d = 0; d <= 128; d++) {
+          const kin = computeSatKinematics(sat.altitudeKm, sat.inclinationDeg, sat.raanDeg, (d / 128) * 360, sat.baseSpeed);
+          ringPts.push(new THREE.Vector3(kin.positionKm.x / KM_PER_UNIT, kin.positionKm.y / KM_PER_UNIT, kin.positionKm.z / KM_PER_UNIT));
+        }
+        levelSatGroup.add(new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(ringPts),
+          new THREE.LineBasicMaterial({ color: sat.colorHex, transparent: true, opacity: highlight ? 0.56 : isPolarCross ? 0.34 : 0.2 })
+        ));
+
+        levelSatGroup.add(buildClosedGroundTrackRibbon(
+          sat,
+          EARTH_VISUAL_RADIUS + (highlight ? 0.056 : 0.046),
+          highlight ? 0.04 : isPolarCross ? 0.024 : 0.02,
+          highlight ? 0.86 : isPolarCross ? 0.48 : 0.34,
+          !highlight
+        ));
+
+        const nadirArr = new Float32Array(6);
+        const nadirGeo = new THREE.BufferGeometry();
+        nadirGeo.setAttribute('position', new THREE.BufferAttribute(nadirArr, 3));
+        const nadirLine = new THREE.Line(nadirGeo, new THREE.LineBasicMaterial({ color: sat.colorHex, transparent: true, opacity: 0.55 }));
+        nadirLine.frustumCulled = false;
+        levelSatGroup.add(nadirLine);
+
+        const subDisc = new THREE.Mesh(subDiscGeo, new THREE.MeshBasicMaterial({ color: sat.colorHex, side: THREE.DoubleSide }));
+        subDisc.renderOrder = 4;
+        levelSatGroup.add(subDisc);
+
+        const labelEl = document.createElement('div');
+        labelEl.className = 'world-label sat-label';
+        labelEl.style.borderColor = sat.color + 'aa';
+        labelEl.textContent = `${sat.code} · ${sat.baseSpeed.toFixed(1)}`;
+        worldLabelsEl.appendChild(labelEl);
+
+        state.satVisuals.push({ sat, mesh, nadirLine, nadirArr, nadirGeo, subDisc, labelEl });
+      }
+
+      const cp = cfg.collisionNodeLatLon;
+      const colPos = latLonToEcef(cp.lat, cp.lon, EARTH_VISUAL_RADIUS + (540 / KM_PER_UNIT));
+      collisionMarkerGroup.position.set(colPos.x, colPos.y, colPos.z);
+      collisionMarkerGroup.lookAt(colPos.x * 2, colPos.y * 2, colPos.z * 2);
+
+      const p1 = cfg.satellites.find((s) => s.id === cfg.collisionPairIds[0]).code;
+      const p2 = cfg.satellites.find((s) => s.id === cfg.collisionPairIds[1]).code;
+      dom.hudLevelTitle.textContent = cfg.title;
+      if (dom.levelSelect) dom.levelSelect.value = String(cfg.level);
+      dom.collisionCourseMeta.textContent = cfg.level === 2
+        ? `${p1}/${p2} LCM @ ${cfg.collisionNodeLabel.split(' (')[0]} (${cfg.predictedCollisionSec.toFixed(1)}s)`
+        : cfg.level === 3
+          ? `Pursuit + 5 Cross @ ${cfg.collisionNodeLabel.split(' (')[0]}`
+          : `${p1}/${p2} @ ${cfg.collisionNodeLabel.split(' (')[0]} (${cfg.predictedCollisionSec.toFixed(1)}s)`;
+
+      resetSatellitesToPlanningStart();
+      buildZonePalette();
+      buildSatelliteTable();
+      renderPlacedZonesList();
+      recomputeStaticPrediction();
+      setAppMode(nextMode);
+    }
+
+    function resetSatellitesToPlanningStart() {
+      const cfg = LEVEL_CONFIGS[state.level] || LEVEL_CONFIGS[1];
+      state.simSec = 0;
+      state.runMinSepKm = Infinity;
+      riskLine.visible = false;
+      for (let i = 0; i < state.satellites.length; i++) {
+        Object.assign(state.satellites[i], createSatStateFromCfg(cfg.satellites[i]));
+      }
+      syncSatelliteTransforms();
+      updateHudReadouts();
+    }
+
+    /* =========================================================================
+     * MODULE 7: HUD RENDERING & GRID INTERACTION
+     * ========================================================================= */
+    function setAppMode(nextMode) {
+      state.mode = nextMode;
+      document.body.dataset.state = nextMode;
+
+      dom.failModal.classList.toggle('open', nextMode === 'failed');
+      dom.victoryModal.classList.toggle('open', nextMode === 'victory');
+
+      const isPlanning = nextMode === 'planning';
+      const isRunning = nextMode === 'running';
+      const isPaused = nextMode === 'paused';
+      collisionMarkerGroup.visible = isPlanning;
+
+      if (isRunning) {
+        dom.btnRun.textContent = '⏸ PAUSE';
+        dom.btnRun.setAttribute('aria-label', 'Pause simulation');
+        dom.btnRun.classList.add('pause-mode');
+      } else if (isPaused) {
+        dom.btnRun.textContent = '▶ RESUME';
+        dom.btnRun.setAttribute('aria-label', 'Resume simulation');
+        dom.btnRun.classList.remove('pause-mode');
+      } else {
+        dom.btnRun.textContent = '▶ RUN';
+        dom.btnRun.setAttribute('aria-label', 'Run simulation');
+        dom.btnRun.classList.remove('pause-mode');
+      }
+
+      if (dom.btnResetSim) {
+        dom.btnResetSim.disabled = isPlanning && state.simSec <= 0;
+      }
+      dom.btnClearZones.disabled = !isPlanning;
+      if (dom.levelSelect) dom.levelSelect.disabled = isRunning;
+      for (const btn of dom.placedList.querySelectorAll('.btn-remove-zone')) {
+        btn.disabled = !isPlanning;
+      }
+      for (const btn of dom.zonePalette.querySelectorAll('.btn-flip-sign')) {
+        btn.disabled = !isPlanning;
+      }
+
+      if (!isPlanning) {
+        state.armedTemplateId = null;
+        state.dragging = null;
+        dragGhostEl.classList.remove('visible');
+        clearPreviewMesh();
+        controls.enabled = true;
+        refreshPaletteArmedState();
+      }
+
+      updateHudReadouts();
+    }
+
+    let activePopoverAnchor = null;
+    let activePopoverPinned = false;
+
+    function getInfoPayload(key) {
+      const cfg = LEVEL_CONFIGS[state.level] || LEVEL_CONFIGS[1];
+      const nominalV = cfg.satellites[0].baseSpeed;
+      const periodSec = ORBIT_ARC_UNITS / nominalV;
+      const p1 = cfg.satellites.find((s) => s.id === cfg.collisionPairIds[0]).code;
+      const p2 = cfg.satellites.find((s) => s.id === cfg.collisionPairIds[1]).code;
+      const nodeShort = cfg.collisionNodeLabel.split(' (')[0];
+
+      if (key === 'mission') {
+        if (cfg.level === 2) {
+          return {
+            title: `${cfg.title} — Pendulum LCM`,
+            badge: `10T = ${(periodSec * TARGET_PERIODS).toFixed(0)}s`,
+            body: `SAT-1 (T = 36.0s) and SAT-2 (T = 30.0s) miss early passes, then converge on a shared LCM beat at ${cfg.collisionNodeLabel} without approaching closer than ${COLLISION_RADIUS_KM} km.`,
+            formula: `LCM(36s, 30s) = 180s · Converges at t = 84.0s and t = 264.0s.`,
+          };
+        }
+        if (cfg.level === 3) {
+          return {
+            title: `${cfg.title} — Zeno Pursuit`,
+            badge: `7 Sats · 10T`,
+            body: `Tortoise (SAT-1, 10.0 u/s) and faster Achilles (SAT-2, 12.5 u/s) pursue along the equator, repeatedly closing in and separating while crossing 5 perpendicular polar satellites.`,
+            formula: `Place sequential/graduated zones on the grid to keep all 7 satellites > ${COLLISION_RADIUS_KM} km apart for 360s.`,
+          };
+        }
+        return {
+          title: `${cfg.title} Rules`,
+          badge: `10T = ${(periodSec * TARGET_PERIODS).toFixed(0)}s`,
+          body: `Guide all ${cfg.satellites.length} satellites (v = ${nominalV.toFixed(1)} u/s, T = ${periodSec.toFixed(1)}s) through 10 orbital periods without approaching closer than ${COLLISION_RADIUS_KM} km.`,
+          formula: `${p1} & ${p2} intersect at ${cfg.collisionNodeLabel} at t = ${cfg.predictedCollisionSec.toFixed(1)}s.`,
+        };
+      }
+      if (key === 'zones-help') {
+        return {
+          title: 'Zone Placement & Editing',
+          badge: '20°×20° Grid',
+          body: 'Drag a zone card onto Earth’s grid (or click card then grid cell). Drag placed zones on the globe to move them; right-click or press Del to return to inventory.',
+          formula: 'Speed modifier Δv% applies strictly over arc length L and reverts to baseSpeed upon exit.',
+        };
+      }
+      if (key === 'sats-help') {
+        const req = state.preRunPrediction ? state.preRunPrediction.requiredDeltaSec.toFixed(2) : '0.27';
+        const cur = state.preRunPrediction ? state.preRunPrediction.arrivalDeltaSec.toFixed(2) : '0.00';
+        if (cfg.level === 2) {
+          return {
+            title: 'Pendulum LCM Convergence',
+            badge: '36.0s vs 30.0s',
+            body: `SAT-1 and SAT-2 pass ${nodeShort} every 36s and 30s, converging at t = 84.0s and t = 264.0s. Shift period arrival times with zones (t = L / v_mod) to break every convergence.`,
+            formula: `Current Δt @ 84s = ${cur}s · Required Δt ≥ ${req}s across all 10 periods.`,
+          };
+        }
+        if (cfg.level === 3) {
+          return {
+            title: 'Zeno Pursuit & 5 Crossings',
+            badge: 'Sequential Zones',
+            body: `Achilles (12.5 u/s) closes on Tortoise (10.0 u/s) every 144s while both cross 5 polar tracks (SAT-3..7). A single zone cannot clear all 10 periods — layer sequential zones along R3/R4.`,
+            formula: `t_zone = L / (v · (1 + Δv%)) · Slower SAT-1 shifts more Δt per pass than faster SAT-2.`,
+          };
+        }
+        return {
+          title: 'Conjunction & Timing Math',
+          badge: `${p1} / ${p2}`,
+          body: `${p1} and ${p2} arrive simultaneously at ${nodeShort} (${cfg.predictedCollisionSec.toFixed(1)}s). Create enough arrival time difference Δt to clear the ${COLLISION_RADIUS_KM} km collision sphere.`,
+          formula: `Current Δt = ${cur}s · Required Δt ≥ ${req}s across all 10 periods.`,
+        };
+      }
+      if (key === 'exec-help') {
+        return {
+          title: 'Execution Controls',
+          badge: 'Space = Run/Pause',
+          body: 'Use 1x, 5x, or 15x fast-forward to verify all 10 orbital periods (360s). Pause freezes satellites, speeds, active zone timers, and elapsed periods; Resume continues seamlessly. Use Reset (R) to restart from t = 0.',
+          formula: `Target = ${TARGET_PERIODS.toFixed(0)} periods (${(periodSec * TARGET_PERIODS).toFixed(0)}s) · Collision threshold = ${COLLISION_RADIUS_KM} km.`,
+        };
+      }
+      if (key.startsWith('template:')) {
+        const typeId = key.slice('template:'.length);
+        const tpl = ZONE_TEMPLATES.find((t) => t.typeId === typeId);
+        if (!tpl) return null;
+        const eff = getEffectForTemplate(tpl);
+        const calc = computeZoneTransitDelta(tpl.lengthUnits, nominalV, eff);
+        const dtSign = calc.deltaSec >= 0 ? '+' : '';
+        return {
+          title: `${tpl.name} (${tpl.mapCode})`,
+          badge: `${formatPct(eff)} · ${tpl.lengthUnits}u`,
+          body: `Modifies orbital speed by ${formatPct(eff)} strictly over L = ${tpl.lengthUnits}u, then reverts cleanly to ${nominalV.toFixed(2)} u/s upon exit.${tpl.allowSignFlip ? ' Use ± to flip polarity.' : ''}`,
+          formula: `t = ${tpl.lengthUnits} / ${calc.modifiedSpeed.toFixed(2)} = ${calc.modifiedTimeSec.toFixed(2)}s (Δt ${dtSign}${calc.deltaSec.toFixed(2)}s / pass)`,
+        };
+      }
+      if (key.startsWith('placed:')) {
+        const zoneId = key.slice('placed:'.length);
+        const z = state.placedZones.find((p) => p.id === zoneId);
+        if (!z) return null;
+        const calc = computeZoneTransitDelta(z.lengthUnits, nominalV, z.effectPct);
+        const dtSign = calc.deltaSec >= 0 ? '+' : '';
+        const hits = findSatellitesCrossingCell(state.satellites, z.row, z.col);
+        const hitStr = hits.length > 0 ? hits.map((h) => h.sat.code).join(', ') : 'No track intersection';
+        return {
+          title: `${z.name} (${z.mapCode})`,
+          badge: `R${z.row}·C${z.col}`,
+          body: `Affects: ${hitStr}. Drag on globe or chip to reposition; right-click or press Del to return to inventory.`,
+          formula: `L=${z.lengthUnits}u · Δv=${formatPct(z.effectPct)} (${calc.modifiedSpeed.toFixed(2)} u/s) · t=${calc.modifiedTimeSec.toFixed(2)}s (Δt ${dtSign}${calc.deltaSec.toFixed(2)}s/pass)`,
+        };
+      }
+      return null;
+    }
+
+    function positionInfoPopover(anchorEl) {
+      const rect = anchorEl.getBoundingClientRect();
+      const pop = dom.infoPopover;
+      const popW = Math.min(300, window.innerWidth - 24);
+      const popH = pop.offsetHeight || 110;
+      let left = rect.right - popW;
+      if (left < 12) left = Math.min(rect.left, window.innerWidth - popW - 12);
+      if (left + popW > window.innerWidth - 12) left = window.innerWidth - popW - 12;
+      let top = rect.top - popH - 8;
+      if (top < 12) top = Math.min(rect.bottom + 8, window.innerHeight - popH - 12);
+      pop.style.left = `${Math.round(left)}px`;
+      pop.style.top = `${Math.round(top)}px`;
+    }
+
+    function openInfoPopover(anchorEl, key, pin = false) {
+      const payload = getInfoPayload(key);
+      if (!payload) { closeInfoPopover(true); return; }
+      if (activePopoverAnchor && activePopoverAnchor !== anchorEl) {
+        activePopoverAnchor.setAttribute('aria-expanded', 'false');
+      }
+      activePopoverAnchor = anchorEl;
+      if (pin) activePopoverPinned = true;
+      anchorEl.setAttribute('aria-expanded', 'true');
+      dom.popoverTitle.textContent = payload.title;
+      dom.popoverBadge.textContent = payload.badge;
+      dom.popoverBody.textContent = payload.body;
+      dom.popoverFormula.textContent = payload.formula;
+      dom.infoPopover.classList.add('open');
+      dom.infoPopover.setAttribute('aria-hidden', 'false');
+      positionInfoPopover(anchorEl);
+    }
+
+    function closeInfoPopover(force = false) {
+      if (!force && activePopoverPinned) return;
+      if (activePopoverAnchor) {
+        activePopoverAnchor.setAttribute('aria-expanded', 'false');
+      }
+      activePopoverAnchor = null;
+      activePopoverPinned = false;
+      dom.infoPopover.classList.remove('open');
+      dom.infoPopover.setAttribute('aria-hidden', 'true');
+    }
+
+    function bindInfoButton(btn, key) {
+      btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      btn.addEventListener('pointerenter', () => {
+        if (!activePopoverPinned || activePopoverAnchor === btn) {
+          openInfoPopover(btn, key, false);
+        }
+      });
+      btn.addEventListener('pointerleave', () => {
+        if (!activePopoverPinned && activePopoverAnchor === btn) {
+          closeInfoPopover(false);
+        }
+      });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (activePopoverPinned && activePopoverAnchor === btn) {
+          closeInfoPopover(true);
+        } else {
+          openInfoPopover(btn, key, true);
+        }
+      });
+    }
+
+    for (const staticBtn of document.querySelectorAll('.info-bang-btn[data-info-key]')) {
+      bindInfoButton(staticBtn, staticBtn.dataset.infoKey);
+    }
+
+    window.addEventListener('pointerdown', (e) => {
+      if (activePopoverPinned && !e.target.closest('#info-popover') && !e.target.closest('.info-bang-btn')) {
+        closeInfoPopover(true);
+      }
+    });
+
+    function refreshZoneInspector() {
+      const target =
+        state.hoveredInspect ||
+        state.selectedInspect ||
+        (state.armedTemplateId ? { source: 'template', typeId: state.armedTemplateId } : null);
+
+      const inspectedPlacedId = target && target.source === 'placed' ? target.zoneId : null;
+      for (const [id, vis] of state.placedZoneVisuals.entries()) {
+        vis.labelEl.classList.toggle('inspected', id === inspectedPlacedId);
+      }
+      for (const row of dom.placedList.querySelectorAll('.placed-row')) {
+        row.classList.toggle('inspected', row.dataset.zoneId === inspectedPlacedId);
+      }
+      if (activePopoverAnchor && activePopoverAnchor.dataset?.infoKey) {
+        const key = activePopoverAnchor.dataset.infoKey;
+        const payload = getInfoPayload(key);
+        if (!payload) closeInfoPopover(true);
+        else {
+          dom.popoverTitle.textContent = payload.title;
+          dom.popoverBadge.textContent = payload.badge;
+          dom.popoverBody.textContent = payload.body;
+          dom.popoverFormula.textContent = payload.formula;
+        }
+      }
+    }
+
+    function refreshPaletteArmedState() {
+      for (const btn of dom.zonePalette.querySelectorAll('.zone-card')) {
+        btn.classList.toggle('armed', btn.dataset.typeId === state.armedTemplateId);
+      }
+      refreshZoneInspector();
+    }
+
+    function buildZonePalette() {
+      dom.zonePalette.innerHTML = '';
+
+      for (const tpl of ZONE_TEMPLATES) {
+        const effectPct = getEffectForTemplate(tpl);
+        const used = countPlacedByType(tpl.typeId) >= tpl.maxCount;
+        const pctStr = formatPct(effectPct);
+
+        const card = document.createElement('div');
+        card.className = 'zone-card';
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', used ? '-1' : '0');
+        card.dataset.typeId = tpl.typeId;
+        card.dataset.used = used ? 'true' : 'false';
+        card.setAttribute('aria-label', `${tpl.name} ${pctStr} length ${tpl.lengthUnits} units (${used ? 'placed' : '1 available'})`);
+
+        const flipBtnHtml = tpl.allowSignFlip
+          ? `<button type="button" class="btn-flip-sign" data-flip-type="${tpl.typeId}" aria-label="Flip ${tpl.name} polarity">±</button>`
+          : '';
+
+        card.innerHTML = `
+          <button type="button" class="info-bang-btn info-bang-corner" data-info-key="template:${tpl.typeId}" aria-label="${tpl.name} math details" aria-expanded="false">!</button>
+          <div class="zone-card-top">
+            <span class="zone-card-name">
+              <span class="zone-swatch" style="background:${tpl.color}"></span>
+              <span>${tpl.shortName}</span>
+              <span class="zone-abbr">${tpl.mapCode}</span>
+            </span>
+          </div>
+          <div class="zone-card-sub">
+            <span class="zone-card-effect" style="color:${tpl.color}">${used ? 'Used (1/1)' : `${pctStr} · ${tpl.lengthUnits}u`}</span>
+            ${flipBtnHtml}
+          </div>
+        `;
+
+        bindInfoButton(card.querySelector('.info-bang-btn'), `template:${tpl.typeId}`);
+
+        card.addEventListener('pointerenter', () => {
+          state.hoveredInspect = { source: 'template', typeId: tpl.typeId };
+          refreshZoneInspector();
+        });
+        card.addEventListener('pointerleave', () => {
+          if (state.hoveredInspect?.typeId === tpl.typeId) {
+            state.hoveredInspect = null;
+            refreshZoneInspector();
+          }
+        });
+
+        const flipBtn = card.querySelector('.btn-flip-sign');
+        if (flipBtn) {
+          flipBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+          flipBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (state.mode !== 'planning') return;
+            state.selectedSigns[tpl.typeId] = -state.selectedSigns[tpl.typeId];
+            buildZonePalette();
+            refreshPaletteArmedState();
+          });
+        }
+
+        card.addEventListener('pointerdown', (e) => {
+          if (state.mode !== 'planning' || used) return;
+          e.preventDefault();
+          const curEffect = getEffectForTemplate(tpl);
+          state.dragging = {
+            mode: 'place',
+            template: tpl,
+            effectPct: curEffect,
+            startX: e.clientX,
+            startY: e.clientY,
+            moved: false,
+            hoveredCell: null,
+          };
+          controls.enabled = false;
+          dragGhostEl.textContent = `${tpl.mapCode} · ${tpl.name} (${formatPct(curEffect)} · ${tpl.lengthUnits}u)`;
+          dragGhostEl.style.borderColor = tpl.color;
+          dragGhostEl.style.left = `${e.clientX}px`;
+          dragGhostEl.style.top = `${e.clientY}px`;
+          dragGhostEl.classList.add('visible');
+        });
+
+        card.addEventListener('keydown', (e) => {
+          if ((e.key === 'Enter' || e.key === ' ') && state.mode === 'planning' && !used) {
+            e.preventDefault();
+            state.armedTemplateId = state.armedTemplateId === tpl.typeId ? null : tpl.typeId;
+            refreshPaletteArmedState();
+          }
+        });
+
+        dom.zonePalette.appendChild(card);
+      }
+      refreshPaletteArmedState();
+    }
+
+    function buildSatelliteTable() {
+      dom.satTable.innerHTML = `
+        <div class="sat-row head">
+          <span>Sat</span>
+          <span>v (u/s)</span>
+          <span>T (s)</span>
+          <span>Status</span>
+        </div>
+      `;
+      const cfg = LEVEL_CONFIGS[state.level] || LEVEL_CONFIGS[1];
+      for (const sat of state.satellites) {
+        const isPair = cfg.collisionPairIds.includes(sat.id);
+        const isPursuit = cfg.pursuitPairIds ? cfg.pursuitPairIds.includes(sat.id) : false;
+        const row = document.createElement('div');
+        row.className = `sat-row${isPair || isPursuit ? ' risk-pair' : ''}`;
+        const defaultStatus = isPair
+          ? `t_col ${cfg.predictedCollisionSec.toFixed(1)}s`
+          : isPursuit
+            ? 'Pursuit'
+            : cfg.level === 3
+              ? 'Cross 90°'
+              : 'Nominal';
+        row.innerHTML = `
+          <span class="sat-id-cell"><span class="zone-swatch" style="width:7px;height:7px;background:${sat.color}"></span>${sat.code}</span>
+          <span data-speed-el="${sat.id}">${sat.speed.toFixed(2)}</span>
+          <span>${sat.periodSec.toFixed(1)}s</span>
+          <span data-status-el="${sat.id}" style="color:${isPair ? '#fda4af' : isPursuit ? '#fbbf24' : '#94a3b8'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${defaultStatus}</span>
+        `;
+        dom.satTable.appendChild(row);
+      }
+    }
+
+    function renderPlacedZonesList() {
+      dom.placedList.innerHTML = '';
+      if (state.placedZones.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'placed-empty';
+        empty.textContent = 'No zones placed — drag from left onto grid';
+        dom.placedList.appendChild(empty);
+        refreshZoneInspector();
+        return;
+      }
+
+      for (const z of state.placedZones) {
+        const row = document.createElement('div');
+        row.className = 'placed-row';
+        row.dataset.zoneId = z.id;
+        row.innerHTML = `
+          <span class="zone-swatch" style="background:${z.color}"></span>
+          <span style="color:${z.color};font-weight:700">${z.mapCode}</span>
+          <span style="color:${z.color}">${formatPct(z.effectPct)}</span>
+          <span style="color:#94a3b8">R${z.row}·C${z.col}</span>
+          <button type="button" class="info-bang-btn" data-info-key="placed:${z.id}" aria-label="Details for ${z.name}" aria-expanded="false">!</button>
+          <button type="button" class="btn-remove-zone" aria-label="Remove ${z.name} at R${z.row} C${z.col}">&times;</button>
+        `;
+        bindInfoButton(row.querySelector('.info-bang-btn'), `placed:${z.id}`);
+        row.addEventListener('pointerenter', () => {
+          state.hoveredInspect = { source: 'placed', zoneId: z.id };
+          refreshZoneInspector();
+        });
+        row.addEventListener('pointerleave', () => {
+          if (state.hoveredInspect?.zoneId === z.id) {
+            state.hoveredInspect = null;
+            refreshZoneInspector();
+          }
+        });
+        row.addEventListener('pointerdown', (e) => {
+          if (state.mode !== 'planning' || e.button !== 0) return;
+          if (e.target.closest('.btn-remove-zone') || e.target.closest('.info-bang-btn')) return;
+          e.preventDefault();
+          beginMoveDrag(z.id, e.clientX, e.clientY);
+        });
+        row.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          if (state.mode === 'planning') removePlacedZone(z.id);
+        });
+        const btn = row.querySelector('.btn-remove-zone');
+        btn.disabled = state.mode !== 'planning';
+        btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        btn.addEventListener('click', (e) => { e.stopPropagation(); removePlacedZone(z.id); });
+        dom.placedList.appendChild(row);
+      }
+      refreshZoneInspector();
+    }
+
+    function beginMoveDrag(zoneId, clientX, clientY) {
+      if (state.mode !== 'planning') return;
+      const z = state.placedZones.find((p) => p.id === zoneId);
+      if (!z) return;
+      const tpl = ZONE_TEMPLATES.find((t) => t.typeId === z.typeId);
+      if (!tpl) return;
+      state.selectedInspect = { source: 'placed', zoneId: z.id };
+      refreshZoneInspector();
+      state.dragging = {
+        mode: 'move',
+        placedId: z.id,
+        template: tpl,
+        effectPct: z.effectPct,
+        origRow: z.row,
+        origCol: z.col,
+        startX: clientX,
+        startY: clientY,
+        moved: false,
+        hoveredCell: { row: z.row, col: z.col },
+      };
+      controls.enabled = false;
+      dragGhostEl.textContent = `Move ${tpl.mapCode} · Drag to new grid cell`;
+      dragGhostEl.style.borderColor = tpl.color;
+      dragGhostEl.style.left = `${clientX}px`;
+      dragGhostEl.style.top = `${clientY}px`;
+    }
+
+    // Raycast onto Earth Pick Sphere (Layer 2)
+    const gridRaycaster = new THREE.Raycaster();
+    gridRaycaster.layers.set(2);
+    const pointerNdc = new THREE.Vector2();
+
+    function pickEarthGridCell(clientX, clientY) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+      pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      gridRaycaster.setFromCamera(pointerNdc, camera);
+      const hits = gridRaycaster.intersectObject(pickSphere, false);
+      if (hits.length === 0) return null;
+      const geo = vec3ToLatLonDeg(hits[0].point);
+      if (geo.latDeg < GRID_LAT_MIN || geo.latDeg > GRID_LAT_MAX) return null;
+      return latLonToGridCell(geo.latDeg, geo.lonDeg);
+    }
+
+    window.addEventListener('pointermove', (e) => {
+      if (state.mode === 'title') return;
+
+      if (state.mode === 'planning' && state.dragging) {
+        if (Math.hypot(e.clientX - state.dragging.startX, e.clientY - state.dragging.startY) > 6) {
+          state.dragging.moved = true;
+          dragGhostEl.classList.add('visible');
+        }
+        dragGhostEl.style.left = `${e.clientX}px`;
+        dragGhostEl.style.top = `${e.clientY}px`;
+        const cell = pickEarthGridCell(e.clientX, e.clientY);
+        state.dragging.hoveredCell = cell;
+        const actionWord = state.dragging.mode === 'move' ? 'Move' : 'Snap';
+        if (cell) {
+          updatePreviewMesh(state.dragging.template, state.dragging.effectPct, cell.row, cell.col);
+          dragGhostEl.textContent = `${actionWord} R${cell.row}·C${cell.col} · ${state.dragging.template.mapCode} (${formatPct(state.dragging.effectPct)})`;
+        } else {
+          clearPreviewMesh();
+          dragGhostEl.textContent = `${state.dragging.template.mapCode} · ${state.dragging.template.name} — Move over Earth Grid`;
+        }
+        return;
+      }
+
+      if (state.mode === 'planning' && state.armedTemplateId) {
+        const tpl = ZONE_TEMPLATES.find((z) => z.typeId === state.armedTemplateId);
+        const cell = pickEarthGridCell(e.clientX, e.clientY);
+        if (tpl && cell) updatePreviewMesh(tpl, getEffectForTemplate(tpl), cell.row, cell.col);
+        else clearPreviewMesh();
+        return;
+      }
+
+      if (e.target === renderer.domElement) {
+        const cell = pickEarthGridCell(e.clientX, e.clientY);
+        const placed = cell ? state.placedZones.find((z) => z.row === cell.row && z.col === cell.col) : null;
+        if (placed) {
+          if (state.hoveredInspect?.zoneId !== placed.id) {
+            state.hoveredInspect = { source: 'placed', zoneId: placed.id };
+            refreshZoneInspector();
+          }
+        } else {
+          if (state.hoveredInspect?.source === 'placed' && !e.target.closest?.('.world-label')) {
+            state.hoveredInspect = null;
+            refreshZoneInspector();
+          }
+        }
+      }
+    });
+
+    window.addEventListener('pointerup', () => {
+      if (!state.dragging) return;
+      const drag = state.dragging;
+      state.dragging = null;
+      controls.enabled = true;
+      dragGhostEl.classList.remove('visible');
+      clearPreviewMesh();
+
+      if (drag.mode === 'move') {
+        if (drag.moved && drag.hoveredCell) {
+          movePlacedZone(drag.placedId, drag.hoveredCell.row, drag.hoveredCell.col);
+        } else if (!drag.moved) {
+          state.selectedInspect = { source: 'placed', zoneId: drag.placedId };
+          refreshZoneInspector();
+        }
+        return;
+      }
+
+      if (drag.moved && drag.hoveredCell) {
+        addPlacedZone(drag.template, drag.hoveredCell.row, drag.hoveredCell.col, drag.effectPct);
+        state.armedTemplateId = null;
+        refreshPaletteArmedState();
+      } else if (!drag.moved) {
+        state.armedTemplateId = state.armedTemplateId === drag.template.typeId ? null : drag.template.typeId;
+        refreshPaletteArmedState();
+      }
+    });
+
+    let canvasDownPos = { x: 0, y: 0 };
+    // Capture phase intercepts clicks/drags on placed zones before OrbitControls rotates the camera
+    renderer.domElement.addEventListener('pointerdown', (e) => {
+      canvasDownPos.x = e.clientX;
+      canvasDownPos.y = e.clientY;
+      if (state.mode !== 'planning' || state.armedTemplateId || state.dragging) return;
+      const cell = pickEarthGridCell(e.clientX, e.clientY);
+      const placed = cell ? state.placedZones.find((z) => z.row === cell.row && z.col === cell.col) : null;
+      if (!placed) return;
+      if (e.button === 2) {
+        e.stopImmediatePropagation();
+        return;
+      }
+      if (e.button === 0) {
+        e.stopImmediatePropagation();
+        beginMoveDrag(placed.id, e.clientX, e.clientY);
+      }
+    }, { capture: true });
+
+    renderer.domElement.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (state.mode !== 'planning') return;
+      const cell = pickEarthGridCell(e.clientX, e.clientY);
+      const placed = cell ? state.placedZones.find((z) => z.row === cell.row && z.col === cell.col) : null;
+      if (placed) removePlacedZone(placed.id);
+    });
+
+    renderer.domElement.addEventListener('pointerup', (e) => {
+      if (Math.hypot(e.clientX - canvasDownPos.x, e.clientY - canvasDownPos.y) > 6) return;
+      const cell = pickEarthGridCell(e.clientX, e.clientY);
+
+      if (state.mode === 'planning' && cell && state.armedTemplateId) {
+        const tpl = ZONE_TEMPLATES.find((z) => z.typeId === state.armedTemplateId);
+        if (tpl && countPlacedByType(tpl.typeId) < tpl.maxCount) {
+          addPlacedZone(tpl, cell.row, cell.col, getEffectForTemplate(tpl));
+          state.armedTemplateId = null;
+          clearPreviewMesh();
+          refreshPaletteArmedState();
+        }
+        return;
+      }
+
+      const placed = cell ? state.placedZones.find((z) => z.row === cell.row && z.col === cell.col) : null;
+      state.selectedInspect = placed ? { source: 'placed', zoneId: placed.id } : null;
+      refreshZoneInspector();
+    });
+
+    function toggleRunOrPause() {
+      if (state.mode === 'planning') {
+        resetSatellitesToPlanningStart();
+        audio.playRunStart();
+        setAppMode('running');
+      } else if (state.mode === 'running') {
+        setAppMode('paused');
+      } else if (state.mode === 'paused') {
+        audio.playRunStart();
+        setAppMode('running');
+      }
+    }
+
+    function resetSimulationToStart() {
+      resetSatellitesToPlanningStart();
+      setAppMode('planning');
+    }
+
+    dom.btnLaunch.addEventListener('click', () => {
+      state.cameraTransitioning = true;
+      state.desiredCamPos.copy(DEFAULT_CAM_POS);
+      state.desiredTarget.copy(DEFAULT_TARGET);
+      setAppMode('planning');
+    });
+
+    dom.btnRun.addEventListener('click', (e) => { e.currentTarget.blur(); toggleRunOrPause(); });
+    if (dom.btnResetSim) {
+      dom.btnResetSim.addEventListener('click', (e) => {
+        e.currentTarget.blur();
+        if (state.mode !== 'title') resetSimulationToStart();
+      });
+    }
+    dom.btnClearZones.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      if (state.mode === 'planning') clearAllPlacedZones(false);
+    });
+
+    dom.speedPills.addEventListener('click', (e) => {
+      const btn = e.target.closest('.speed-btn');
+      if (!btn) return;
+      state.speedMultiplier = Number(btn.dataset.speed);
+      for (const b of dom.speedPills.querySelectorAll('.speed-btn')) {
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+      }
+      btn.blur();
+    });
+
+    dom.btnToggleGrid.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      state.showGrid = !state.showGrid;
+      gridWireframe.visible = state.showGrid;
+      dom.btnToggleGrid.setAttribute('aria-pressed', state.showGrid ? 'true' : 'false');
+      dom.btnToggleGrid.textContent = state.showGrid ? 'Grid: ON' : 'Grid: OFF';
+    });
+
+    dom.btnMute.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      audio.enabled = !audio.enabled;
+      dom.btnMute.setAttribute('aria-pressed', audio.enabled ? 'true' : 'false');
+      dom.btnMute.textContent = audio.enabled ? 'Audio: ON' : 'Audio: OFF';
+    });
+
+    dom.btnResetCam.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      state.cameraTransitioning = true;
+      state.desiredCamPos.copy(DEFAULT_CAM_POS);
+      state.desiredTarget.set(0, state.hudCollapsed ? 0 : DEFAULT_TARGET.y, 0);
+    });
+
+    dom.btnCollapseHud.addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      state.hudCollapsed = !state.hudCollapsed;
+      dom.dockShell.classList.toggle('collapsed', state.hudCollapsed);
+      dom.btnCollapseHud.setAttribute('aria-expanded', state.hudCollapsed ? 'false' : 'true');
+      dom.btnCollapseHud.textContent = state.hudCollapsed ? 'Show HUD [H]' : 'Hide HUD [H]';
+      state.cameraTransitioning = true;
+      state.desiredCamPos.copy(camera.position);
+      state.desiredTarget.set(0, state.hudCollapsed ? 0 : DEFAULT_TARGET.y, 0);
+    });
+
+    dom.btnFailRetry.addEventListener('click', () => {
+      resetSatellitesToPlanningStart();
+      setAppMode('planning');
+    });
+    dom.btnFailClear.addEventListener('click', () => {
+      clearAllPlacedZones(true);
+      resetSatellitesToPlanningStart();
+      setAppMode('planning');
+    });
+    if (dom.levelSelect) {
+      dom.levelSelect.addEventListener('change', (e) => {
+        const nextLvl = Number(e.target.value);
+        e.target.blur();
+        if (state.mode === 'running' || !LEVEL_CONFIGS[nextLvl]) return;
+        loadLevel(nextLvl, 'planning');
+      });
+    }
+
+    dom.btnNextLevel.addEventListener('click', () => {
+      const nextLvl = state.level < 3 ? state.level + 1 : 1;
+      loadLevel(nextLvl, 'planning');
+      state.cameraTransitioning = true;
+      state.desiredCamPos.copy(DEFAULT_CAM_POS);
+      state.desiredTarget.copy(DEFAULT_TARGET);
+    });
+    dom.btnReplayLevel.addEventListener('click', () => {
+      loadLevel(state.level, 'planning');
+    });
+
+    controls.addEventListener('start', () => { state.cameraTransitioning = false; });
+
+    window.addEventListener('keydown', (e) => {
+      if (state.mode === 'title') {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dom.btnLaunch.click(); }
+        return;
+      }
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (state.mode === 'planning' || state.mode === 'running' || state.mode === 'paused') toggleRunOrPause();
+      } else if (e.key === 'r' || e.key === 'R') {
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        if (state.mode === 'running' || state.mode === 'paused' || state.mode === 'failed' || state.mode === 'victory') {
+          e.preventDefault();
+          resetSimulationToStart();
+        }
+      } else if (e.key === 'h' || e.key === 'H') {
+        dom.btnCollapseHud.click();
+      } else if (e.key === 'v' || e.key === 'V') {
+        dom.btnResetCam.click();
+      } else if (e.key === 'g' || e.key === 'G') {
+        dom.btnToggleGrid.click();
+      } else if (e.key === 'm' || e.key === 'M') {
+        dom.btnMute.click();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        if (state.mode !== 'planning') return;
+        const targetId =
+          state.selectedInspect?.source === 'placed'
+            ? state.selectedInspect.zoneId
+            : (state.hoveredInspect?.source === 'placed' ? state.hoveredInspect.zoneId : null);
+        if (targetId) {
+          e.preventDefault();
+          removePlacedZone(targetId);
+        }
+      } else if (e.key === 'Escape') {
+        if (activePopoverPinned || dom.infoPopover.classList.contains('open')) {
+          closeInfoPopover(true);
+        }
+        if (state.armedTemplateId) {
+          state.armedTemplateId = null;
+          clearPreviewMesh();
+        }
+        state.selectedInspect = null;
+        refreshPaletteArmedState();
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    /* =========================================================================
+     * MODULE 8: FRAME TRANSFORMS, PROJECTIONS & MAIN LOOP
+     * ========================================================================= */
+    const _vPos = new THREE.Vector3();
+    const _vVel = new THREE.Vector3();
+    const _vUp = new THREE.Vector3();
+    const _vRight = new THREE.Vector3();
+    const _mRot = new THREE.Matrix4();
+    const _vProj = new THREE.Vector3();
+    const _vCamDir = new THREE.Vector3();
+    const _ecefTmp = { x: 0, y: 0, z: 0 };
+
+    function syncSatelliteTransforms() {
+      const surfaceR = EARTH_VISUAL_RADIUS + 0.052;
+      for (const sv of state.satVisuals) {
+        const sat = sv.sat;
+        _vPos.set(sat.positionKm.x / KM_PER_UNIT, sat.positionKm.y / KM_PER_UNIT, sat.positionKm.z / KM_PER_UNIT);
+        _vVel.set(sat.velocityKmPerSec.x, sat.velocityKmPerSec.y, sat.velocityKmPerSec.z).normalize();
+        _vUp.copy(_vPos).normalize();
+        _vRight.crossVectors(_vUp, _vVel).normalize();
+        _vUp.crossVectors(_vVel, _vRight).normalize();
+        _mRot.makeBasis(_vRight, _vUp, _vVel);
+
+        sv.mesh.position.copy(_vPos);
+        sv.mesh.quaternion.setFromRotationMatrix(_mRot);
+
+        latLonToEcef(sat.latDeg, sat.lonDeg, surfaceR, _ecefTmp);
+        sv.subDisc.position.set(_ecefTmp.x, _ecefTmp.y, _ecefTmp.z);
+        sv.subDisc.lookAt(_ecefTmp.x * 2, _ecefTmp.y * 2, _ecefTmp.z * 2);
+
+        sv.nadirArr[0] = _vPos.x; sv.nadirArr[1] = _vPos.y; sv.nadirArr[2] = _vPos.z;
+        sv.nadirArr[3] = _ecefTmp.x; sv.nadirArr[4] = _ecefTmp.y; sv.nadirArr[5] = _ecefTmp.z;
+        sv.nadirGeo.attributes.position.needsUpdate = true;
+
+        sv.labelEl.textContent = `${sat.code} · ${sat.speed.toFixed(1)}`;
+      }
+    }
+
+    function updateHudReadouts() {
+      const cfg = LEVEL_CONFIGS[state.level] || LEVEL_CONFIGS[1];
+      const periodSec = ORBIT_ARC_UNITS / cfg.satellites[0].baseSpeed;
+      const targetSimSec = periodSec * TARGET_PERIODS;
+      const periods = Math.min(TARGET_PERIODS, state.simSec / periodSec);
+      dom.hudPeriod.textContent = `${periods.toFixed(2)} / ${TARGET_PERIODS.toFixed(0)}`;
+      dom.hudPeriodFill.style.width = `${clamp((periods / TARGET_PERIODS) * 100, 0, 100).toFixed(1)}%`;
+      dom.simTimeMeta.textContent = `t = ${state.simSec.toFixed(1)} / ${targetSimSec.toFixed(0)}s`;
+
+      if (state.mode === 'planning') {
+        dom.hudPhaseStatus.textContent = 'Planning';
+        dom.hudPhaseStatus.className = 'metric-val status-plan';
+      } else if (state.mode === 'running') {
+        dom.hudPhaseStatus.textContent = `Running ${state.speedMultiplier}x`;
+        dom.hudPhaseStatus.className = 'metric-val status-run';
+      } else if (state.mode === 'paused') {
+        dom.hudPhaseStatus.textContent = 'Paused';
+        dom.hudPhaseStatus.className = 'metric-val status-pause';
+      } else if (state.mode === 'failed') {
+        dom.hudPhaseStatus.textContent = 'Collision';
+        dom.hudPhaseStatus.className = 'metric-val status-fail';
+      } else if (state.mode === 'victory') {
+        dom.hudPhaseStatus.textContent = 'Cleared';
+        dom.hudPhaseStatus.className = 'metric-val status-ok';
+      }
+
+      for (const sat of state.satellites) {
+        const spEl = dom.satTable.querySelector(`[data-speed-el="${sat.id}"]`);
+        if (spEl) {
+          spEl.textContent = sat.speed.toFixed(2);
+          spEl.style.color = sat.activeZoneColor || '#f1f5f9';
+        }
+        const stEl = dom.satTable.querySelector(`[data-status-el="${sat.id}"]`);
+        if (stEl) {
+          const pairIdx = cfg.collisionPairIds.indexOf(sat.id);
+          const isPair = pairIdx !== -1;
+          const isPursuit = cfg.pursuitPairIds ? cfg.pursuitPairIds.includes(sat.id) : false;
+          const activeFailPair = state.preRunPrediction && !state.preRunPrediction.survived && state.preRunPrediction.collidedPairIds
+            ? state.preRunPrediction.collidedPairIds.includes(sat.id)
+            : false;
+
+          if ((state.mode === 'running' || state.mode === 'paused') && sat.activeZoneColor) {
+            stEl.textContent = sat.activeZoneLabel;
+            stEl.style.color = sat.activeZoneColor;
+          } else if (state.mode === 'paused') {
+            stEl.textContent = 'Paused';
+            stEl.style.color = '#fbbf24';
+          } else if (state.mode === 'planning' && activeFailPair && state.preRunPrediction.firstClosePassSec > cfg.predictedCollisionSec + 6.0) {
+            stEl.textContent = `t_col ${state.preRunPrediction.firstClosePassSec.toFixed(1)}s`;
+            stEl.style.color = '#fda4af';
+          } else if (isPair && state.mode === 'planning' && state.preRunPrediction) {
+            const satDelta = pairIdx === 0 ? state.preRunPrediction.sat1DeltaSec : state.preRunPrediction.sat2DeltaSec;
+            if (Math.abs(satDelta) >= 0.005) {
+              const sign = satDelta >= 0 ? '+' : '';
+              stEl.textContent = `Δt ${sign}${satDelta.toFixed(2)}s`;
+              stEl.style.color = state.preRunPrediction.survived ? '#34d399' : '#fbbf24';
+            } else {
+              stEl.textContent = `t_col ${cfg.predictedCollisionSec.toFixed(1)}s`;
+              stEl.style.color = state.preRunPrediction.survived ? '#34d399' : '#fda4af';
+            }
+          } else if (isPair) {
+            stEl.textContent = `t_col ${cfg.predictedCollisionSec.toFixed(1)}s`;
+            stEl.style.color = state.preRunPrediction && state.preRunPrediction.survived ? '#34d399' : '#fda4af';
+          } else if (isPursuit) {
+            stEl.textContent = state.preRunPrediction?.survived ? 'Pursuit OK' : 'Pursuit';
+            stEl.style.color = state.preRunPrediction?.survived ? '#34d399' : '#fbbf24';
+          } else {
+            stEl.textContent = cfg.level === 3 ? 'Cross 90°' : 'Nominal';
+            stEl.style.color = '#94a3b8';
+          }
+        }
+      }
+    }
+
+    function updateProjectedLabels() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const showLabels = state.mode !== 'title';
+      const maxLabelY = state.hudCollapsed ? h - 42 : dom.dockPanel.getBoundingClientRect().top - 22;
+      _vCamDir.copy(camera.position).normalize();
+
+      for (const sv of state.satVisuals) {
+        if (!showLabels) { sv.labelEl.style.opacity = '0'; continue; }
+        _vProj.copy(sv.mesh.position).project(camera);
+        const dotHem = sv.mesh.position.clone().normalize().dot(_vCamDir);
+        const x = (_vProj.x * 0.5 + 0.5) * w;
+        const y = (-_vProj.y * 0.5 + 0.5) * h;
+        const vis = _vProj.z >= -1 && _vProj.z <= 1 && dotHem > -0.22 && x > 28 && x < w - 28 && y > 62 && y < maxLabelY;
+        sv.labelEl.style.opacity = vis ? '1' : '0';
+        if (vis) { sv.labelEl.style.left = `${x.toFixed(1)}px`; sv.labelEl.style.top = `${y.toFixed(1)}px`; }
+      }
+
+      for (const { mesh, labelEl } of state.placedZoneVisuals.values()) {
+        if (!showLabels) { labelEl.style.opacity = '0'; continue; }
+        const anchor = mesh.userData.labelAnchor;
+        _vProj.copy(anchor).project(camera);
+        const dotHem = anchor.clone().normalize().dot(_vCamDir);
+        const x = (_vProj.x * 0.5 + 0.5) * w;
+        const y = (-_vProj.y * 0.5 + 0.5) * h;
+        const vis = _vProj.z >= -1 && _vProj.z <= 1 && dotHem > 0.12 && x > 36 && x < w - 36 && y > 62 && y < maxLabelY;
+        labelEl.style.opacity = vis ? '0.94' : '0';
+        if (vis) { labelEl.style.left = `${x.toFixed(1)}px`; labelEl.style.top = `${y.toFixed(1)}px`; }
+      }
+
+      if (state.mode === 'planning' && collisionMarkerGroup.visible) {
+        _vProj.copy(collisionMarkerGroup.position).project(camera);
+        const dotHem = collisionMarkerGroup.position.clone().normalize().dot(_vCamDir);
+        const x = (_vProj.x * 0.5 + 0.5) * w;
+        const y = (-_vProj.y * 0.5 + 0.5) * h;
+        const vis = _vProj.z >= -1 && _vProj.z <= 1 && dotHem > 0.1 && x > 40 && x < w - 40 && y > 62 && y < maxLabelY;
+        collisionLabelEl.style.opacity = vis ? '1' : '0';
+        if (vis) { collisionLabelEl.style.left = `${x.toFixed(1)}px`; collisionLabelEl.style.top = `${y.toFixed(1)}px`; }
+      } else {
+        collisionLabelEl.style.opacity = '0';
+      }
+    }
+
+    let frameId = 0;
+    let lastTimeMs = performance.now();
+    let hudAccum = 0;
+
+    function afterDraw(cb) {
+      const gl = renderer.getContext();
+      if (gl && typeof gl.fenceSync === 'function') {
+        const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
+        const poll = () => {
+          const status = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
+          if (status === gl.UNSIGNALED) frameId = window.setTimeout(poll, 4);
+          else { if (sync) gl.deleteSync(sync); frameId = window.setTimeout(cb, 16); }
+        };
+        frameId = window.setTimeout(poll, 4);
+      } else {
+        frameId = window.setTimeout(cb, 24);
+      }
+    }
+
+    function tick() {
+      const nowMs = performance.now();
+      const rawDt = Math.max(0.001, (nowMs - lastTimeMs) / 1000);
+      lastTimeMs = nowMs;
+      // Allow up to 0.35s realDt at fast-forward while fixed sub-stepping <= 0.05s guarantees identical deterministic physics across GPU & SwiftShader.
+      const maxRealDt = state.mode === 'running' && state.speedMultiplier >= 5 ? 0.35 : 0.12;
+      const realDt = Math.min(rawDt, maxRealDt);
+
+      if (state.mode !== 'paused') {
+        for (const { mesh } of state.placedZoneVisuals.values()) {
+          const tex = mesh.userData.bandTex;
+          const dir = mesh.userData.zone.effectPct >= 0 ? -1 : 1;
+          tex.offset.x += Math.min(realDt, 0.05) * 0.14 * dir;
+        }
+      }
+
+      if (state.mode === 'title') {
+        const t = nowMs * 0.00018;
+        camera.position.set(Math.cos(t) * 15.2 - 1.8, 4.6 + Math.sin(t * 0.7) * 0.9, Math.sin(t) * 15.2);
+        controls.target.set(-1.6, -0.2, 0);
+        camera.lookAt(controls.target);
+        stepPuzzleSimulation(state.satellites, [], Math.min(realDt, 0.05) * 1.2);
+        syncSatelliteTransforms();
+      } else {
+        if (state.mode === 'running') {
+          const cfg = LEVEL_CONFIGS[state.level] || LEVEL_CONFIGS[1];
+          const periodSec = ORBIT_ARC_UNITS / cfg.satellites[0].baseSpeed;
+          const targetSimSec = periodSec * TARGET_PERIODS;
+          const totalSimDt = realDt * state.speedMultiplier;
+          const subSteps = Math.max(1, Math.ceil(totalSimDt / 0.05));
+          const stepDt = totalSimDt / subSteps;
+
+          let latestRisk = null;
+          for (let s = 0; s < subSteps; s++) {
+            const dt = Math.min(stepDt, targetSimSec - state.simSec);
+            state.simSec += dt;
+            const res = stepPuzzleSimulation(state.satellites, state.placedZones, dt);
+            if (res.minSeparationKm < state.runMinSepKm) state.runMinSepKm = res.minSeparationKm;
+            if (res.riskPairs.length > 0) latestRisk = res.riskPairs[0];
+
+            if (res.collidedPair) {
+              syncSatelliteTransforms();
+              const mid = new THREE.Vector3(
+                (res.collidedPair.satA.positionKm.x + res.collidedPair.satB.positionKm.x) * 0.5 / KM_PER_UNIT,
+                (res.collidedPair.satA.positionKm.y + res.collidedPair.satB.positionKm.y) * 0.5 / KM_PER_UNIT,
+                (res.collidedPair.satA.positionKm.z + res.collidedPair.satB.positionKm.z) * 0.5 / KM_PER_UNIT
+              );
+              triggerBurst(mid);
+              state.cameraTrauma = 0.75;
+              audio.playCollisionFail();
+
+              const pred = state.preRunPrediction || evaluatePuzzlePlan(state.placedZones, cfg);
+              const dtObs = pred.arrivalDeltaSec.toFixed(2);
+              const dtReq = res.collidedPair.requiredDeltaSec.toFixed(2);
+              const nodeName = cfg.collisionNodeLabel.split(' (')[0];
+              const periodHit = (state.simSec / res.collidedPair.satA.periodSec).toFixed(2);
+
+              dom.failDesc.textContent = `${res.collidedPair.satA.code} and ${res.collidedPair.satB.code} arrived at ${nodeName} within ${dtObs}s (${Math.round(res.collidedPair.distanceKm)} km separation < ${COLLISION_RADIUS_KM} km) — adjust net arrival Δt by at least ${dtReq}s.`;
+              dom.failStatPair.textContent = `${res.collidedPair.satA.code} / ${res.collidedPair.satB.code}`;
+              dom.failStatDelta.textContent = `${dtObs}s / ${dtReq}s`;
+              dom.failStatT.textContent = `${state.simSec.toFixed(1)}s (${periodHit}T)`;
+              setAppMode('failed');
+              break;
+            }
+
+            if (state.simSec >= targetSimSec - 1e-4) {
+              state.simSec = targetSimSec;
+              syncSatelliteTransforms();
+              audio.playLevelComplete();
+              dom.victoryTitle.textContent = `${cfg.title} Complete`;
+              dom.victoryDesc.textContent = state.level === 1
+                ? 'All five satellites completed 10 full orbital periods cleanly. Level 2 (Pendulum LCM) is now unlocked.'
+                : state.level === 2
+                  ? 'All five satellites cleared 10 orbital periods without periodic synchronization. Level 3 (Zeno Pursuit) is now unlocked.'
+                  : 'All seven satellites — Tortoise, Achilles, and all five perpendicular cross-traffic orbits — completed 10 periods safely.';
+              dom.btnNextLevel.textContent = state.level === 1 ? 'Continue to Level 2' : state.level === 2 ? 'Continue to Level 3' : 'Play Level 1';
+              dom.winStatZones.textContent = String(state.placedZones.length);
+              dom.winStatSep.textContent = `${Math.round(state.runMinSepKm)} km`;
+              setAppMode('victory');
+              break;
+            }
+          }
+
+          if (latestRisk && state.mode === 'running') {
+            riskLine.visible = true;
+            riskLinePos[0] = latestRisk.satA.positionKm.x / KM_PER_UNIT;
+            riskLinePos[1] = latestRisk.satA.positionKm.y / KM_PER_UNIT;
+            riskLinePos[2] = latestRisk.satA.positionKm.z / KM_PER_UNIT;
+            riskLinePos[3] = latestRisk.satB.positionKm.x / KM_PER_UNIT;
+            riskLinePos[4] = latestRisk.satB.positionKm.y / KM_PER_UNIT;
+            riskLinePos[5] = latestRisk.satB.positionKm.z / KM_PER_UNIT;
+            riskLineGeo.attributes.position.needsUpdate = true;
+            riskLineMat.color.setHex(latestRisk.critical ? 0xf43f5e : 0xf59e0b);
+          } else {
+            riskLine.visible = false;
+          }
+
+          syncSatelliteTransforms();
+        }
+
+        if (state.cameraTransitioning) {
+          const alpha = 1 - Math.exp(-5.0 * Math.min(realDt, 0.05));
+          camera.position.lerp(state.desiredCamPos, alpha);
+          controls.target.lerp(state.desiredTarget, alpha);
+          if (camera.position.distanceTo(state.desiredCamPos) < 0.08 && controls.target.distanceTo(state.desiredTarget) < 0.04) {
+            state.cameraTransitioning = false;
+          }
+        }
+
+        if (state.cameraTrauma > 0) {
+          state.cameraTrauma = Math.max(0, state.cameraTrauma - Math.min(realDt, 0.05) * 1.4);
+          const shake = state.cameraTrauma * state.cameraTrauma * 0.2;
+          camera.position.x += (Math.random() - 0.5) * shake;
+          camera.position.y += (Math.random() - 0.5) * shake;
+        }
+
+        controls.update();
+      }
+
+      if (burstTimer > 0) {
+        const bdt = Math.min(realDt, 0.05);
+        burstTimer = Math.max(0, burstTimer - bdt);
+        for (let i = 0; i < BURST_COUNT; i++) {
+          burstPositions[i * 3] += burstVels[i].x * bdt;
+          burstPositions[i * 3 + 1] += burstVels[i].y * bdt;
+          burstPositions[i * 3 + 2] += burstVels[i].z * bdt;
+        }
+        burstGeo.attributes.position.needsUpdate = true;
+        burstMat.opacity = Math.min(1, burstTimer / 0.8);
+        if (burstTimer <= 0) burstPoints.visible = false;
+      }
+
+      updateProjectedLabels();
+
+      hudAccum += realDt;
+      if (hudAccum >= 0.08) {
+        hudAccum = 0;
+        if (state.mode !== 'title') updateHudReadouts();
+      }
+
+      renderer.render(scene, camera);
+
+      if (isSoftwareGl) afterDraw(tick);
+      else frameId = requestAnimationFrame(tick);
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const autostart = params.get('autostart') === '1';
+    const initialLvlParam = Number(params.get('level') || 1);
+    const initialLevel = LEVEL_CONFIGS[initialLvlParam] ? initialLvlParam : 1;
+    loadLevel(initialLevel, autostart ? 'planning' : 'title');
+    if (autostart) {
+      camera.position.copy(DEFAULT_CAM_POS);
+      controls.target.copy(DEFAULT_TARGET);
+      controls.update();
+    }
+
+    if (!isSoftwareGl) renderer.compile(scene, camera);
+    tick();
+
+    window.__ORBITAL_PUZZLE__ = {
+      getState: () => ({
+        mode: state.mode,
+        level: state.level,
+        simSec: state.simSec,
+        periods: state.simSec / (ORBIT_ARC_UNITS / LEVEL_CONFIGS[state.level].satellites[0].baseSpeed),
+        speedMultiplier: state.speedMultiplier,
+        prediction: state.preRunPrediction,
+        placedZones: state.placedZones.map((z) => ({
+          id: z.id, typeId: z.typeId, mapCode: z.mapCode, name: z.name, row: z.row, col: z.col, lengthUnits: z.lengthUnits, effectPct: z.effectPct,
+        })),
+        inspectedText: dom.infoPopover.classList.contains('open') ? dom.infoPopover.textContent.replace(/\s+/g, ' ').trim() : '',
+        satellites: state.satellites.map((s) => ({
+          id: s.id,
+          baseSpeed: s.baseSpeed,
+          speed: s.speed,
+          periodSec: s.periodSec,
+          phaseDeg: s.phaseDeg,
+          latDeg: s.latDeg,
+          lonDeg: s.lonDeg,
+          activeZoneLabel: s.activeZoneLabel,
+          transits: Object.fromEntries(
+            Object.entries(s.transits || {}).map(([k, v]) => [k, { ...v }])
+          ),
+        })),
+      }),
+      getCellScreenPos: (row, col) => {
+        const lat = GRID_LAT_MIN + (row + 0.5) * CELL_DEG;
+        const lon = -180 + (col + 0.5) * CELL_DEG;
+        const p = latLonToEcef(lat, lon, EARTH_VISUAL_RADIUS + 0.18);
+        const v = new THREE.Vector3(p.x, p.y, p.z).project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return {
+          x: rect.left + (v.x * 0.5 + 0.5) * rect.width,
+          y: rect.top + (-v.y * 0.5 + 0.5) * rect.height,
+          visible: v.z >= -1 && v.z <= 1,
+        };
+      },
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "orbital-watch",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Deterministic 3D orbital collision-avoidance puzzle (GeoGame).",
+  "scripts": {
+    "start": "npx serve .",
+    "test": "tsx --test src/sim/orbitalMath.test.ts src/sim/puzzleEngine.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "tsx": "^4.21.0"
+  }
+}
